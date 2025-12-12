@@ -86,6 +86,13 @@ ipcMain.handle(IpcEvents.OPEN_EXTERNAL, (_, url) => {
     shell.openExternal(url);
 });
 
+ipcMain.handle(IpcEvents.NET_FETCH, async (_, url: string) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+    const buffer = await response.arrayBuffer();
+    return buffer;
+});
+
 
 ipcMain.handle(IpcEvents.GET_QUICK_CSS, () => readCss());
 ipcMain.handle(IpcEvents.SET_QUICK_CSS, (_, css) =>

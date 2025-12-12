@@ -76,6 +76,10 @@ export default {
         openExternal: (url: string) => invoke<void>(IpcEvents.OPEN_EXTERNAL, url)
     },
 
+    net: {
+        fetch: (url: string) => invoke<ArrayBuffer>(IpcEvents.NET_FETCH, url)
+    },
+
     csp: {
         /**
          * Note: Only supports full explicit matches, not wildcards.
