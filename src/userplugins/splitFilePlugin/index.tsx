@@ -1,8 +1,10 @@
 import definePlugin from "@utils/types";
+import { OptionType } from "@utils/types";
+import { definePluginSettings } from "@api/Settings";
 import * as webpack from "@webpack";
 // Patcher is not available in Vencord API
 // import { Patcher } from "@utils/webpack";
-import { FluxDispatcher as Dispatcher, SelectedChannelStore as ChannelStore, MessageActions, RestAPI, Constants, SnowflakeUtils, Toasts, showToast, Button } from "@webpack/common";
+import { FluxDispatcher as Dispatcher, SelectedChannelStore as ChannelStore, MessageActions, RestAPI, Constants, SnowflakeUtils, Toasts, showToast, Menu, ContextMenuApi } from "@webpack/common";
 import { useCallback, useState, useEffect } from "@webpack/common";
 import { ChatBarButton } from "@api/ChatButtons";
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
@@ -13,6 +15,15 @@ const CHUNK_SIZE = 9.5 * 1024 * 1024;
 const CHUNK_TIMEOUT = 5 * 60 * 1000; // 5-minute cache expiration for incomplete files.
 
 const CloudUpload = webpack.findLazy(m => m.prototype?.trackUploadFinished);
+const ButtonClasses = webpack.findByPropsLazy("lookFilled", "colorBrand", "sizeSmall");
+
+const settings = definePluginSettings({
+    bypassLimit: {
+        type: OptionType.BOOLEAN,
+        default: false,
+        description: "Allow uploading files larger than 500MB (Bypasses Discord limit via splitting)",
+    }
+});
 
 /**
  * Metadata structure for a file chunk.
@@ -53,6 +64,24 @@ interface ChunkStorage {
 // const ChannelTextArea = webpack.find(m => m.type?.displayName === "ChannelTextArea");
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const FileSplitterContextMenu = () => {
+    const { bypassLimit } = settings.use(["bypassLimit"]);
+    return (
+        <Menu.Menu navId="file-splitter-context" onClose={ContextMenuApi.closeContextMenu}>
+            <Menu.MenuGroup>
+                <Menu.MenuCheckboxItem
+                    id="bypass-limit"
+                    label="Allow >500MB Uploads"
+                    checked={bypassLimit}
+                    action={() => {
+                        settings.store.bypassLimit = !bypassLimit;
+                    }}
+                />
+            </Menu.MenuGroup>
+        </Menu.Menu>
+    );
+};
 
 // Temporary workaround for missing native fetch
 // We will try to rely on RestAPI if possible, but if not, we might need to add native support.
@@ -274,27 +303,15 @@ const DownloadButton = ({ message }: { message: any }) => {
 
 
     return (
-
-        <Button 
-
-            size={Button.Sizes.SMALL} 
-
-            color={Button.Colors.BRAND} 
-
+        <button
+            className={`${ButtonClasses.button} ${ButtonClasses.lookFilled} ${ButtonClasses.colorBrand} ${ButtonClasses.sizeSmall} ${ButtonClasses.grow}`}
             onClick={handleClick}
-
             disabled={disabled}
-
             style={{ marginTop: 4, width: '100%' }}
-
         >
-
-            {status}
-
-        </Button>
-
+            <div className={ButtonClasses.contents}>{status}</div>
+        </button>
     );
-
 };
 
 
@@ -391,7 +408,7 @@ const SplitFileComponent = () => {
 
                 setProgress(Math.round(((i + 1) / totalChunks) * 100));
                 // Add delay to prevent rate limits
-                await delay(1000); 
+                await delay(5000); 
             }
 
             console.log("[FileSplitter] Upload complete.");
@@ -415,9 +432,9 @@ const SplitFileComponent = () => {
         if (!file) return;
 
         // Pre-flight check: Enforce Discord's absolute 500MB (Nitro) file size limit.
-        if (file.size > 500 * 1024 * 1024) {
+        if (file.size > 500 * 1024 * 1024 && !settings.store.bypassLimit) {
              console.log("[FileSplitter] File too large (>500MB)");
-             setStatus("File exceeds 500MB. This is not supported.");
+             setStatus("File > 500MB. Right click to enable bypass.");
              return;
         }
 
@@ -435,6 +452,10 @@ const SplitFileComponent = () => {
         e.target.value = "";
     }, [handleFileSplit]);
 
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        ContextMenuApi.openContextMenu(e, () => <FileSplitterContextMenu />);
+    }, []);
+
     return (
         <>
             <input
@@ -445,6 +466,7 @@ const SplitFileComponent = () => {
             />
             <ChatBarButton
                 onClick={() => document.getElementById('file-splitter-input')?.click()}
+                onContextMenu={handleContextMenu}
                 tooltip={isUploading ? `Uploading... ${progress}%` : "Upload Large File"}
             >
                 <UploadIcon />
@@ -464,6 +486,7 @@ export default definePlugin({
             name: "Your Name",
         },
     ],
+    settings,
 
     // This property is used to store the interval ID for cleanup.
     chunkCleanupInterval: null as NodeJS.Timeout | null,
