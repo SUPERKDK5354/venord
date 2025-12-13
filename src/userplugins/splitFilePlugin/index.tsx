@@ -11,7 +11,7 @@ import { CloudUploadPlatform } from "@vencord/discord-types/enums";
 // import { NsUI } from "@utils/types"; // Vencord standard type import
 
 // Optimized chunk size. Set to 9.5MB to be safe for 10MB upload limits.
-const CHUNK_SIZE = 9.5 * 1024 * 1024;
+// const CHUNK_SIZE = 9.5 * 1024 * 1024; // Now dynamic
 const CHUNK_TIMEOUT = 5 * 60 * 1000; // 5-minute cache expiration for incomplete files.
 
 const CloudUpload = webpack.findLazy(m => m.prototype?.trackUploadFinished);
@@ -22,6 +22,11 @@ const settings = definePluginSettings({
         type: OptionType.BOOLEAN,
         default: false,
         description: "Allow uploading files larger than 500MB (Bypasses Discord limit via splitting)",
+    },
+    chunkSize: {
+        type: OptionType.NUMBER,
+        default: 9.5,
+        description: "Chunk Size (MB)",
     }
 });
 
@@ -66,17 +71,43 @@ interface ChunkStorage {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const FileSplitterContextMenu = () => {
-    const { bypassLimit } = settings.use(["bypassLimit"]);
+    const { bypassLimit, chunkSize } = settings.use(["bypassLimit", "chunkSize"]);
     return (
         <Menu.Menu navId="file-splitter-context" onClose={ContextMenuApi.closeContextMenu}>
-            <Menu.MenuGroup>
+            <Menu.MenuGroup label="Settings">
                 <Menu.MenuCheckboxItem
                     id="bypass-limit"
-                    label="Allow >500MB Uploads"
+                    label="Allow >500MB Uploads (might not work)"
                     checked={bypassLimit}
                     action={() => {
                         settings.store.bypassLimit = !bypassLimit;
                     }}
+                />
+            </Menu.MenuGroup>
+            <Menu.MenuGroup label="Chunk Size">
+                <Menu.MenuRadioItem
+                    id="size-9.5"
+                    label="9.5 MB (Free)"
+                    checked={chunkSize === 9.5}
+                    action={() => settings.store.chunkSize = 9.5}
+                />
+                <Menu.MenuRadioItem
+                    id="size-49"
+                    label="49 MB (Nitro Basic / Boost L2)"
+                    checked={chunkSize === 49}
+                    action={() => settings.store.chunkSize = 49}
+                />
+                <Menu.MenuRadioItem
+                    id="size-99"
+                    label="99 MB (Boost L3)"
+                    checked={chunkSize === 99}
+                    action={() => settings.store.chunkSize = 99}
+                />
+                <Menu.MenuRadioItem
+                    id="size-499"
+                    label="499 MB (Nitro Full)"
+                    checked={chunkSize === 499}
+                    action={() => settings.store.chunkSize = 499}
                 />
             </Menu.MenuGroup>
         </Menu.Menu>
@@ -276,28 +307,29 @@ const DownloadButton = ({ message }: { message: any }) => {
 
 
 
-    // Initial check
-
+    // Initial check and auto-registration
     useEffect(() => {
-
         try {
-
             const chunkData = JSON.parse(message.content);
+
+            // Auto-register this chunk if it's valid (re-hydrating state from history)
+            if (isValidChunk(chunkData) && message.attachments?.length > 0) {
+                const attachment = message.attachments[0];
+                ChunkManager.addChunk({
+                    ...chunkData,
+                    url: attachment.url,
+                    proxyUrl: attachment.proxy_url
+                });
+            }
 
             const chunks = ChunkManager.getChunks(chunkData.originalName);
 
             if (chunks && chunks.length === chunkData.total) {
-
                 setStatus("Download Merged File");
-
             } else {
-
                 setStatus(`Waiting for chunks (${chunks?.length || 0}/${chunkData.total})...`);
-
             }
-
         } catch {}
-
     }, [message]);
 
 
@@ -335,11 +367,17 @@ const SplitFileComponent = () => {
         try {
             console.log("[FileSplitter] Starting split upload for:", file.name);
             setIsUploading(true);
+            
+            const sizeMB = settings.store.chunkSize || 9.5;
+            const CHUNK_SIZE = sizeMB * 1024 * 1024;
             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
             if (!CloudUpload) {
                  throw new Error("CloudUpload module not found!");
             }
+
+            // Capture channel ID at start to prevent sending to wrong channel on switch
+            const channelId = ChannelStore.getChannelId();
 
             for (let i = 0; i < totalChunks; i++) {
                 console.log(`[FileSplitter] Processing chunk ${i + 1}/${totalChunks}`);
@@ -347,18 +385,22 @@ const SplitFileComponent = () => {
                 const end = Math.min(start + CHUNK_SIZE, file.size);
 
                 const chunkBlob = file.slice(start, end);
+                
+                // Sanitize filename to prevent upload errors with special chars
+                const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
                 const chunkFile = new File(
                     [chunkBlob],
-                    `${file.name}.part${String(i + 1).padStart(3, '0')}`,
-                    { type: 'application/octet-stream' }
+                    `${safeName}.part${String(i + 1).padStart(3, '0')}`,
+                    { type: '' }
                 );
 
-                const channelId = ChannelStore.getChannelId();
                 const metadata: FileChunkMetadata = {
                     type: "FileSplitterChunk",
                     index: i,
                     total: totalChunks,
-                    originalName: file.name,
+                    originalName: file.name, // Keep original name in metadata for display/merge? 
+                    // Actually, if we rename the chunks, we should probably keep originalName for the final file.
+                    // But we need to ensure we can look it up. ChunkManager keys by originalName.
                     originalSize: file.size,
                     timestamp: Date.now()
                 };
