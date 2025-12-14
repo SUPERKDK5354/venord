@@ -17,24 +17,7 @@ const CHUNK_TIMEOUT = 5 * 60 * 1000; // 5-minute cache expiration for incomplete
 const CloudUpload = webpack.findLazy(m => m.prototype?.trackUploadFinished);
 const ButtonClasses = webpack.findByPropsLazy("lookFilled", "colorBrand", "sizeSmall");
 
-const settings = definePluginSettings({
-    bypassLimit: {
-        type: OptionType.BOOLEAN,
-        default: false,
-        description: "Allow uploading files larger than 500MB (Bypasses Discord limit via splitting)",
-    },
-    chunkSize: {
-        type: OptionType.NUMBER,
-        default: 9.5,
-        description: "Chunk Size (MB)",
-    },
-    // Hidden store for pending uploads persistence
-    pendingUploads: {
-        type: OptionType.STRING,
-        default: "{}",
-        hidden: false // Unhide for debug
-    }
-});
+import { settings } from "./settings";
 
 interface PendingUpload {
     id: number; // timestamp
@@ -399,313 +382,61 @@ const DownloadButton = ({ message }: { message: any }) => {
 
  */
 
+import { openModal } from "@utils/modal";
+import { UploadManager } from "./UploadManager";
+import { UploadsDashboard } from "./UploadsDashboard";
+
 const SplitFileComponent = () => {
-    const [status, setStatus] = useState("");
-    const [isUploading, setIsUploading] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const cancelRef = useRef(false);
-    const [resumeTarget, setResumeTarget] = useState<PendingUpload | null>(null);
+    const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
 
-    // Helpers for Pending Uploads
-    const getPendingUploads = (): Record<string, PendingUpload> => {
-        try {
-            const raw = settings.store.pendingUploads || "{}";
-            return JSON.parse(raw);
-        } catch { return {}; }
-    };
+        // Pre-flight check
+        if (file.size > 500 * 1024 * 1024 && !settings.store.bypassLimit) {
+             showToast("File > 500MB. Enable bypass in settings.", Toasts.Type.FAILURE);
+             return;
+        }
 
-    const savePendingUpload = (upload: PendingUpload) => {
-        const pending = getPendingUploads();
-        pending[upload.id.toString()] = upload;
-        settings.store.pendingUploads = JSON.stringify(pending);
-    };
+        const sizeMB = settings.store.chunkSize || 9.5;
+        // Trigger global upload
+        UploadManager.startUpload(file, sizeMB);
+        
+        // Open dashboard immediately for feedback
+        openModal(props => <UploadsDashboard {...props} />);
+        
+        e.target.value = "";
+    }, []);
 
-    const removePendingUpload = (id: number) => {
-        const pending = getPendingUploads();
-        delete pending[id.toString()];
-        settings.store.pendingUploads = JSON.stringify(pending);
-    };
-
-    const FileSplitterContextMenu = () => {
-        const { bypassLimit, chunkSize, pendingUploads } = settings.use(["bypassLimit", "chunkSize", "pendingUploads"]);
-        const pending = JSON.parse(pendingUploads || "{}");
-        const pendingList = Object.values(pending).sort((a: any, b: any) => b.lastUpdated - a.lastUpdated);
-
-        return (
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        ContextMenuApi.openContextMenu(e, () => (
             <Menu.Menu navId="file-splitter-context" onClose={ContextMenuApi.closeContextMenu}>
-                <Menu.MenuGroup label="Controls">
-                    {isUploading ? (
-                        <Menu.MenuItem 
-                            id="cancel-upload" 
-                            label="Pause Upload" 
-                            action={() => cancelRef.current = true} 
-                            color="danger"
-                        />
-                    ) : null}
-                </Menu.MenuGroup>
-
-                <Menu.MenuGroup label="Pending Uploads">
-                    {pendingList.length === 0 ? (
-                        <Menu.MenuItem id="no-pending" label="No paused uploads" disabled />
-                    ) : (
-                        pendingList.map((p: any) => (
-                            <Menu.MenuItem
-                                id={`resume-${p.id}`}
-                                key={p.id}
-                                label={`${p.name} (${Math.round((p.completedIndices.length / p.totalChunks) * 100)}%)`}
-                                subtext={`${(p.size / 1000 / 1000).toFixed(1)} MB (Channel: ${p.channelId})`}
-                            >
-                                <Menu.MenuItem 
-                                    id={`resume-action-${p.id}`}
-                                    label="Resume Upload"
-                                    action={() => {
-                                        setResumeTarget(p);
-                                        document.getElementById('file-splitter-input')?.click();
-                                    }}
-                                />
-                                <Menu.MenuItem 
-                                    id={`delete-action-${p.id}`}
-                                    label="Delete/Forget"
-                                    color="danger"
-                                    action={() => removePendingUpload(p.id)}
-                                />
-                            </Menu.MenuItem>
-                        ))
-                    )}
-                </Menu.MenuGroup>
-
+                <Menu.MenuItem 
+                    id="manage-uploads" 
+                    label="Manage Uploads" 
+                    action={() => openModal(props => <UploadsDashboard {...props} />)} 
+                />
                 <Menu.MenuGroup label="Settings">
                     <Menu.MenuCheckboxItem
                         id="bypass-limit"
-                        label="Allow >500MB Uploads (might not work)"
-                        checked={bypassLimit}
-                        action={() => {
-                            settings.store.bypassLimit = !bypassLimit;
-                        }}
+                        label="Allow >500MB Uploads"
+                        checked={settings.store.bypassLimit}
+                        action={() => settings.store.bypassLimit = !settings.store.bypassLimit}
                     />
                 </Menu.MenuGroup>
                 <Menu.MenuGroup label="Chunk Size">
-                    <Menu.MenuRadioItem
-                        id="size-9.5"
-                        label="9.5 MB (Free)"
-                        checked={chunkSize === 9.5}
-                        action={() => settings.store.chunkSize = 9.5}
-                    />
-                    <Menu.MenuRadioItem
-                        id="size-49"
-                        label="49 MB (Nitro Basic / Boost L2)"
-                        checked={chunkSize === 49}
-                        action={() => settings.store.chunkSize = 49}
-                    />
-                    <Menu.MenuRadioItem
-                        id="size-99"
-                        label="99 MB (Boost L3)"
-                        checked={chunkSize === 99}
-                        action={() => settings.store.chunkSize = 99}
-                    />
-                    <Menu.MenuRadioItem
-                        id="size-499"
-                        label="499 MB (Nitro Full)"
-                        checked={chunkSize === 499}
-                        action={() => settings.store.chunkSize = 499}
-                    />
+                    {[9.5, 49, 99, 499].map(size => (
+                        <Menu.MenuRadioItem
+                            key={size}
+                            id={`size-${size}`}
+                            label={`${size} MB`}
+                            checked={settings.store.chunkSize === size}
+                            action={() => settings.store.chunkSize = size}
+                        />
+                    ))}
                 </Menu.MenuGroup>
             </Menu.Menu>
-        );
-    };
-
-    /**
-     * Handles the core logic of splitting a file and uploading it in chunks.
-     * @param file The file selected by the user.
-     */
-    const handleFileSplit = useCallback(async (file: File, resumeData?: PendingUpload) => {
-        try {
-            cancelRef.current = false;
-            console.log("[FileSplitter] Starting split upload for:", file.name);
-            setIsUploading(true);
-            
-            // Determine settings (new or resume)
-            const sizeMB = resumeData ? (resumeData.chunkSize / (1024 * 1024)) : (settings.store.chunkSize || 9.5);
-            const CHUNK_SIZE = resumeData ? resumeData.chunkSize : Math.round(sizeMB * 1024 * 1024);
-            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-            if (resumeData) {
-                if (file.size !== resumeData.size || file.name !== resumeData.name) {
-                    showToast("File mismatch! Please select the exact same file.", Toasts.Type.FAILURE);
-                    throw new Error("File mismatch!");
-                }
-            }
-
-            if (!CloudUpload) {
-                 throw new Error("CloudUpload module not found!");
-            }
-
-            const channelId = resumeData ? resumeData.channelId : ChannelStore.getChannelId();
-            const sessionId = resumeData ? resumeData.id : Date.now();
-            
-            let completedIndices = new Set<number>(resumeData ? resumeData.completedIndices : []);
-            
-            // Initial save
-            const currentSession: PendingUpload = {
-                id: sessionId,
-                name: file.name,
-                size: file.size,
-                chunkSize: CHUNK_SIZE,
-                totalChunks: totalChunks,
-                completedIndices: Array.from(completedIndices),
-                channelId: channelId,
-                lastUpdated: Date.now()
-            };
-            savePendingUpload(currentSession);
-
-            // Calculate checksum
-            let fileChecksum = "";
-            try {
-                setStatus("Calculating checksum...");
-                console.log(`[FileSplitter] Calculating checksum for ${file.name}...`);
-                fileChecksum = await calculateChecksum(file);
-                console.log(`[FileSplitter] Original Checksum for ${file.name}: ${fileChecksum}`);
-                currentSession.checksum = fileChecksum;
-                savePendingUpload(currentSession);
-            } catch (e) {
-                console.warn("[FileSplitter] Checksum error:", e);
-            }
-
-            for (let i = 0; i < totalChunks; i++) {
-                if (cancelRef.current) {
-                    setStatus("Upload Paused.");
-                    break;
-                }
-
-                if (completedIndices.has(i)) {
-                    setProgress(Math.round(((i + 1) / totalChunks) * 100));
-                    continue;
-                }
-
-                console.log(`[FileSplitter] Processing chunk ${i + 1}/${totalChunks}`);
-                setStatus(`Uploading part ${i + 1}/${totalChunks}...`);
-                const start = i * CHUNK_SIZE;
-                const end = Math.min(start + CHUNK_SIZE, file.size);
-                const chunkBlob = file.slice(start, end);
-                const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-                const chunkFile = new File(
-                    [chunkBlob],
-                    `${safeName}.part${String(i + 1).padStart(3, '0')}`,
-                    { type: '' }
-                );
-
-                const metadata: FileChunkMetadata = {
-                    type: "FileSplitterChunk",
-                    index: i,
-                    total: totalChunks,
-                    originalName: file.name,
-                    originalSize: file.size,
-                    timestamp: sessionId,
-                    checksum: fileChecksum || undefined
-                };
-
-                await new Promise<void>((resolve, reject) => {
-                    const upload = new CloudUpload({
-                        file: chunkFile,
-                        isClip: false,
-                        isThumbnail: false,
-                        platform: CloudUploadPlatform.WEB
-                    }, channelId, false, 0);
-
-                    upload.on("complete", () => {
-                        if (!upload.uploadedFilename) {
-                             reject(new Error("No uploadedFilename"));
-                             return;
-                        }
-                        RestAPI.post({
-                            url: Constants.Endpoints.MESSAGES(channelId),
-                            body: {
-                                content: JSON.stringify(metadata),
-                                flags: 0, 
-                                nonce: SnowflakeUtils.fromTimestamp(Date.now()),
-                                sticker_ids: [],
-                                type: 0,
-                                attachments: [{
-                                    id: "0",
-                                    filename: chunkFile.name,
-                                    uploaded_filename: upload.uploadedFilename,
-                                    file_size: chunkFile.size
-                                }]
-                            }
-                        }).then(() => resolve()).catch(reject);
-                    });
-
-                    upload.on("error", (error: any) => reject(error));
-                    upload.upload();
-                });
-
-                // Update progress
-                completedIndices.add(i);
-                const updatedSession = { 
-                    ...currentSession, 
-                    completedIndices: Array.from(completedIndices),
-                    lastUpdated: Date.now()
-                };
-                savePendingUpload(updatedSession);
-                setProgress(Math.round(((i + 1) / totalChunks) * 100));
-                
-                await delay(5000); 
-            }
-
-            if (!cancelRef.current) {
-                setStatus(`Successfully uploaded ${totalChunks} parts.`);
-                removePendingUpload(sessionId);
-            }
-        } catch (error: any) {
-            console.error("[FileSplitter] Upload failed:", error);
-            setStatus(`Error: ${error.message}`);
-        } finally {
-            setIsUploading(false);
-            if (!cancelRef.current) setProgress(0);
-        }
+        ));
     }, []);
-
-    /**
-     * Handler for the file input change event.
-     * @param e The React change event from the file input.
-     */
-    const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        console.log("[FileSplitter] File selected:", file);
-        if (!file) return;
-
-        if (resumeTarget) {
-            // Resuming
-            await handleFileSplit(file, resumeTarget);
-            setResumeTarget(null); // Clear target after start
-        } else {
-            // New Upload
-            const sizeMB = settings.store.chunkSize || 9.5;
-            const CHUNK_SIZE = sizeMB * 1024 * 1024;
-
-            // Pre-flight check: Enforce Discord's absolute 500MB (Nitro) file size limit.
-            if (file.size > 500 * 1024 * 1024 && !settings.store.bypassLimit) {
-                 console.log("[FileSplitter] File too large (>500MB)");
-                 setStatus("File > 500MB. Right click to enable bypass.");
-                 return;
-            }
-
-            // Only split if the file is larger than our defined CHUNK_SIZE.
-            if (file.size > CHUNK_SIZE) {
-                console.log(`[FileSplitter] Splitting ${file.name} into ~${Math.ceil(file.size / CHUNK_SIZE)} chunks...`);
-                setStatus(`Splitting ${file.name} into ~${Math.ceil(file.size / CHUNK_SIZE)} chunks...`);
-                await handleFileSplit(file);
-            } else {
-                console.log("[FileSplitter] File small enough, no split needed.");
-                setStatus("File is small enough to be sent directly.");
-            }
-        }
-        e.target.value = ""; // Reset
-    }, [handleFileSplit, resumeTarget]);
-
-    const handleContextMenu = useCallback((e: React.MouseEvent) => {
-        ContextMenuApi.openContextMenu(e, () => <FileSplitterContextMenu />);
-    }, [isUploading, resumeTarget]);
 
     return (
         <>
@@ -718,7 +449,7 @@ const SplitFileComponent = () => {
             <ChatBarButton
                 onClick={() => document.getElementById('file-splitter-input')?.click()}
                 onContextMenu={handleContextMenu}
-                tooltip={isUploading ? `Uploading... ${progress}%` : "Upload Large File"}
+                tooltip="Upload Large File"
             >
                 <UploadIcon />
             </ChatBarButton>
@@ -926,9 +657,13 @@ export default definePlugin({
 
                             },
 
-        start() {
+                start() {
 
-            // Initiate periodic garbage collection for expired chunk data.
+                    UploadManager.init();
+
+        
+
+                    // Initiate periodic garbage collection for expired chunk data.
 
             this.chunkCleanupInterval = setInterval(() => {
 
