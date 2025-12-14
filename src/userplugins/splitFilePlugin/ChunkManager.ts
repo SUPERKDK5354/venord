@@ -1,6 +1,6 @@
 import { Toasts, showToast } from "@webpack/common";
 
-const CHUNK_TIMEOUT = 5 * 60 * 1000;
+const CHUNK_TIMEOUT = 15 * 60 * 1000; // Increased timeout to 15 mins for better scanning/history retention
 
 export interface FileChunkMetadata {
     type: "FileSplitterChunk";
@@ -17,11 +17,29 @@ export interface StoredFileChunk extends FileChunkMetadata {
     proxyUrl?: string;
 }
 
+// Info about the user who uploaded the file
+export interface UploaderInfo {
+    id: string;
+    username: string;
+    avatar?: string;
+    discriminator?: string;
+}
+
+// Represents a complete or partial file detected in chat
+export interface DetectedFileSession {
+    id: number; // timestamp
+    name: string;
+    size: number;
+    totalChunks: number;
+    channelId: string;
+    uploader: UploaderInfo;
+    chunks: StoredFileChunk[]; // The chunks we have found so far
+    lastUpdated: number;
+    isComplete: boolean; // Do we have all chunks?
+}
+
 interface ChunkStorage {
-    [key: string]: {
-        chunks: StoredFileChunk[];
-        lastUpdated: number;
-    };
+    [sessionId: string]: DetectedFileSession;
 }
 
 export const calculateChecksum = async (file: File | Blob): Promise<string> => {
@@ -37,35 +55,70 @@ export const calculateChecksum = async (file: File | Blob): Promise<string> => {
 };
 
 export class ChunkManager {
-    private static storage: ChunkStorage = {};
+    static storage: ChunkStorage = {};
+    private static listeners = new Set<() => void>();
 
-    static addChunk(chunk: StoredFileChunk): void {
+    static addListener(listener: () => void) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+
+    static emitChange() {
+        this.listeners.forEach(l => l());
+    }
+
+    static addChunk(chunk: StoredFileChunk, channelId: string, uploader: UploaderInfo): void {
         const key = chunk.timestamp.toString();
+        
         if (!this.storage[key]) {
             this.storage[key] = {
+                id: chunk.timestamp,
+                name: chunk.originalName,
+                size: chunk.originalSize,
+                totalChunks: chunk.total,
+                channelId: channelId,
+                uploader: uploader,
                 chunks: [],
-                lastUpdated: Date.now()
+                lastUpdated: Date.now(),
+                isComplete: false
             };
         }
 
-        if (!this.storage[key].chunks.some(c => c.index === chunk.index)) {
-            this.storage[key].chunks.push(chunk);
-            this.storage[key].lastUpdated = Date.now();
+        const session = this.storage[key];
+        
+        // Idempotency: Don't add if we already have this index
+        if (!session.chunks.some(c => c.index === chunk.index)) {
+            session.chunks.push(chunk);
+            session.lastUpdated = Date.now();
+            session.isComplete = session.chunks.length === session.totalChunks;
+            this.emitChange();
         }
     }
 
-    static getChunks(sessionId: number): StoredFileChunk[] | null {
-        return this.storage[sessionId.toString()]?.chunks || null;
+    static getSession(sessionId: number): DetectedFileSession | null {
+        return this.storage[sessionId.toString()] || null;
+    }
+
+    // Get all sessions, optionally filtered by channel
+    static getSessions(channelId?: string): DetectedFileSession[] {
+        const sessions = Object.values(this.storage);
+        if (channelId) {
+            return sessions.filter(s => s.channelId === channelId);
+        }
+        return sessions;
     }
 
     static cleanOldChunks(): void {
         const now = Date.now();
+        let changed = false;
         Object.keys(this.storage).forEach(key => {
             if (now - this.storage[key].lastUpdated > CHUNK_TIMEOUT) {
                 delete this.storage[key];
-                console.log(`[FileSplitter] Garbage collected stale chunks for session: ${key}`);
+                changed = true;
+                // console.log(`[FileSplitter] Garbage collected session: ${key}`);
             }
         });
+        if (changed) this.emitChange();
     }
 }
 

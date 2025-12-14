@@ -45,7 +45,8 @@ const DownloadButton = ({ message }: { message: any }) => {
 
             const chunkData = JSON.parse(message.content);
 
-            const chunks = ChunkManager.getChunks(chunkData.timestamp); // Use timestamp as key
+            const session = ChunkManager.getSession(chunkData.timestamp);
+            const chunks = session?.chunks;
 
             
 
@@ -95,10 +96,11 @@ const DownloadButton = ({ message }: { message: any }) => {
                     ...chunkData,
                     url: attachment.url,
                     proxyUrl: attachment.proxy_url
-                });
+                }, message.channel_id, message.author);
             }
 
-            const chunks = ChunkManager.getChunks(chunkData.timestamp); // Use timestamp as key
+            const session = ChunkManager.getSession(chunkData.timestamp);
+            const chunks = session?.chunks;
 
             if (chunks && chunks.length === chunkData.total) {
                 setStatus("Download Merged File");
@@ -312,45 +314,16 @@ export default definePlugin({
                     
 
                                     const storedChunk: StoredFileChunk = {
-
-                    
-
                                         ...chunkData,
-
-                    
-
                                         url: attachment.url,
-
-                    
-
                                         proxyUrl: attachment.proxy_url
-
-                    
-
                                     };
 
-                    
-
-                    
-
-                    
-
-                                    ChunkManager.addChunk(storedChunk);
-
-    
+                                    ChunkManager.addChunk(storedChunk, message.channel_id, message.author);
 
                                         // Check if all chunks have been received.
-
-    
-
-                                        const chunks = ChunkManager.getChunks(chunkData.timestamp);
-
-    
-
-                                        const count = chunks ? chunks.length : 0;
-
-    
-
+                                        const session = ChunkManager.getSession(chunkData.timestamp);
+                                        const count = session ? session.chunks.length : 0;
                                         console.log(`[FileSplitter] Collected ${count}/${chunkData.total} chunks.`);
 
     
