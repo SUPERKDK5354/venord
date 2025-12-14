@@ -257,6 +257,12 @@ export class DownloadManager {
             dl.status = 'completed';
             this.emitChange();
             showToast(`Download ready: ${session.name}`, Toasts.Type.SUCCESS);
+            showNotification({
+                title: "Download Complete",
+                body: `${session.name} is ready to save.`,
+                icon: "DownloadIcon",
+                onClick: () => this.saveFileToDisk(session.id)
+            });
 
         } catch (e: any) {
             if (dl.controller.signal.aborted) return;
