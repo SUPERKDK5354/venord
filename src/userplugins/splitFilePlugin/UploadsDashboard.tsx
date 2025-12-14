@@ -1,9 +1,9 @@
-import { ModalCloseButton, ModalContent, ModalHeader, ModalRoot, ModalSize } from "@utils/modal";
-import { Button, Text, MessageActions, SelectedChannelStore, TabBar, TooltipContainer, TextInput, useState, useEffect, useRef } from "@webpack/common";
+import { ModalCloseButton, ModalContent, ModalRoot, ModalSize } from "@utils/modal";
+import { Button, Text, MessageActions, SelectedChannelStore, TextInput, useEffect, useRef, useState } from "@webpack/common";
 import { UploadManager, UploadSession } from "./UploadManager";
 import { ChunkManager, DetectedFileSession, handleFileMerge } from "./ChunkManager";
-import { DownloadManager, DownloadState } from "./DownloadManager";
 import * as webpack from "@webpack";
+import { settings } from "./settings";
 
 const UserStore = webpack.findByPropsLazy("getCurrentUser");
 
@@ -49,6 +49,22 @@ const ChannelLink = ({ channelId }: { channelId: string }) => {
     );
 };
 
+const SidebarItem = ({ label, selected, onClick }: { label: string, selected: boolean, onClick: () => void }) => (
+    <div 
+        onClick={onClick}
+        style={{
+            padding: '6px 10px',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            backgroundColor: selected ? 'var(--background-modifier-selected)' : 'transparent',
+            color: selected ? 'var(--interactive-active)' : 'var(--interactive-normal)',
+            fontWeight: selected ? 500 : 400
+        }}
+    >
+        {label}
+    </div>
+);
+
 // --- Components ---
 
 const UploadRow = ({ session }: { session: UploadSession }) => {
@@ -92,18 +108,17 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
     };
 
     return (
-        <div className="vc-upload-row" style={{
-            padding: "8px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "4px"
+        <div style={{
+            padding: "12px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "8px",
+            border: "1px solid var(--background-modifier-accent)"
         }}>
             <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileSelect} />
             
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <Text 
                     variant="text-md/bold" 
                     style={{ 
-                        overflow: "hidden", 
-                        textOverflow: "ellipsis", 
-                        whiteSpace: "nowrap", 
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", 
                         cursor: session.lastMessageId ? "pointer" : "default",
                         textDecoration: session.lastMessageId ? "underline" : "none"
                     }}
@@ -113,40 +128,27 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
                 </Text>
                 <div style={{ display: "flex", gap: "8px" }}>
                     {isDone && (
-                        <Button 
-                            size={Button.Sizes.TINY} 
-                            color={Button.Colors.BRAND} 
-                            onClick={handleDownload}
-                            disabled={isMerging}
-                        >
+                        <Button size={Button.Sizes.TINY} color={Button.Colors.BRAND} onClick={handleDownload} disabled={isMerging}>
                             {isMerging ? "Merging..." : "Download"}
                         </Button>
                     )}
                     {!isDone && (
-                        <Button 
-                            size={Button.Sizes.TINY} 
-                            color={isPaused ? Button.Colors.GREEN : Button.Colors.YELLOW}
-                            onClick={() => isPaused ? handleResume() : UploadManager.pauseUpload(session.id)}
-                        >
+                        <Button size={Button.Sizes.TINY} color={isPaused ? Button.Colors.GREEN : Button.Colors.YELLOW} onClick={() => isPaused ? handleResume() : UploadManager.pauseUpload(session.id)}>
                             {isPaused ? "Resume" : "Pause"}
                         </Button>
                     )}
-                    <Button 
-                        size={Button.Sizes.TINY} 
-                        color={Button.Colors.RED}
-                        onClick={() => UploadManager.deleteUpload(session.id)}
-                    >
+                    <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => UploadManager.deleteUpload(session.id)}>
                         {isDone ? "Clear" : "Cancel"}
                     </Button>
                 </div>
             </div>
 
-            <div style={{ height: "8px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "4px", overflow: "hidden" }}>
+            <div style={{ height: "6px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "3px", overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${progress}%`, backgroundColor: "var(--brand-experiment)", transition: "width 0.2s" }} />
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px", alignItems: "center" }}>
-                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "6px", alignItems: "center" }}>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
                     <Text variant="text-xs/normal" color="text-muted">
                         {progress}% • {formatSize(session.bytesUploaded)} / {formatSize(session.size)}
                     </Text>
@@ -163,6 +165,8 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
 };
 
 const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
+    // ... DownloadRow logic ...
+    // Note: Re-implementing simplified to fit new layout
     const [dlState, setDlState] = useState<DownloadState | undefined>(DownloadManager.downloads.get(session.id));
     
     useEffect(() => {
@@ -177,21 +181,21 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
 
     return (
         <div style={{
-            padding: "8px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "4px"
+            padding: "12px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "8px",
+            border: "1px solid var(--background-modifier-accent)"
         }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <Text variant="text-md/bold">{session.name}</Text>
                     {isDone && (
-                        <TooltipContainer text={dlState?.checksumResult === 'pass' ? "Integrity Verified" : "Checksum Mismatch!"}>
-                            <div style={{ 
-                                width: 16, height: 16, borderRadius: "50%", 
-                                backgroundColor: dlState?.checksumResult === 'pass' ? "var(--text-positive)" : "var(--text-danger)",
-                                display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontSize: "10px"
-                            }}>
-                                {dlState?.checksumResult === 'pass' ? "✓" : "✕"}
-                            </div>
-                        </TooltipContainer>
+                        <div style={{ 
+                            padding: "2px 6px", borderRadius: "4px", 
+                            backgroundColor: dlState?.checksumResult === 'pass' ? "var(--background-message-hover)" : "var(--background-accent)",
+                            color: dlState?.checksumResult === 'pass' ? "var(--text-positive)" : "var(--text-danger)",
+                            fontSize: "12px", fontWeight: "bold"
+                        }}>
+                            {dlState?.checksumResult === 'pass' ? "Verified" : "Checksum Fail"}
+                        </div>
                     )}
                 </div>
                 
@@ -209,7 +213,6 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                             {dlState?.status === 'paused' ? "Resume" : "Download"}
                         </Button>
                     )}
-                    {/* Add Cancel Button for downloads */}
                     {(isDownloading || dlState?.status === 'paused') && (
                         <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => DownloadManager.cancelDownload(session.id)}>
                             Cancel
@@ -218,18 +221,16 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                 </div>
             </div>
 
-            {(dlState) && (
-                <div style={{ height: "8px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "4px", overflow: "hidden" }}>
+            {dlState && (
+                <div style={{ height: "6px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "3px", overflow: "hidden", marginBottom: "6px" }}>
                     <div style={{ height: "100%", width: `${progress}%`, backgroundColor: isDone ? "var(--text-positive)" : "var(--brand-experiment)", transition: "width 0.2s" }} />
                 </div>
             )}
 
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px", alignItems: "center" }}>
-                <div style={{ display: "flex", alignItems: "center" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     {session.uploader && <UserLink user={session.uploader} />}
-                    <Text variant="text-xs/normal" color="text-muted" style={{ marginRight: "8px" }}>
-                        {formatSize(session.size)}
-                    </Text>
+                    <Text variant="text-xs/normal" color="text-muted">{formatSize(session.size)}</Text>
                     <ChannelLink channelId={session.channelId} />
                 </div>
                 
@@ -255,8 +256,9 @@ export const UploadsDashboard = (props: any) => {
     // Filters & Sort
     const [searchQuery, setSearchQuery] = useState("");
     const [sortBy, setSortBy] = useState<"date" | "name" | "size">("date");
+    const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
     const [filterChannelId, setFilterChannelId] = useState("");
-    const [filterUserId, setFilterUserId] = useState(""); // Filter by user ID
+    const [filterUserId, setFilterUserId] = useState("");
 
     useEffect(() => {
         const updateUploads = () => setUploads(Array.from(UploadManager.sessions.values()));
@@ -277,7 +279,6 @@ export const UploadsDashboard = (props: any) => {
         setIsScanning(false);
     };
 
-    // Filter Logic
     const currentChannelId = SelectedChannelStore.getChannelId();
     
     let displayList = [];
@@ -290,20 +291,15 @@ export const UploadsDashboard = (props: any) => {
         }
     }
 
-    // Apply Search
     if (searchQuery) {
         displayList = displayList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
     }
 
-    // Apply Filters (Only for Download tabs mainly, but works for uploads too if properties exist)
-    if (filterChannelId && tab !== 'CURRENT_CHANNEL') { // Channel filter redundant in Current Channel tab
+    if (filterChannelId && tab !== 'CURRENT_CHANNEL') {
         displayList = displayList.filter(f => f.channelId === filterChannelId);
     }
-    if (filterUserId) {
-        // DetectedFileSession has .uploader.id, UploadSession doesn't store uploader ID (it's current user)
-        if (tab !== 'YOUR_UPLOADS') {
-            displayList = displayList.filter(f => (f as DetectedFileSession).uploader?.id === filterUserId);
-        }
+    if (filterUserId && tab !== 'YOUR_UPLOADS') {
+        displayList = displayList.filter(f => (f as DetectedFileSession).uploader?.id === filterUserId);
     }
 
     // Sort
@@ -311,108 +307,143 @@ export const UploadsDashboard = (props: any) => {
         const dateA = (a as any).lastUpdated || (a as any).startTime || 0;
         const dateB = (b as any).lastUpdated || (b as any).startTime || 0;
         
-        if (sortBy === 'date') return dateB - dateA; // Newest first
-        if (sortBy === 'name') return a.name.localeCompare(b.name);
-        if (sortBy === 'size') return b.size - a.size;
-        return 0;
+        let res = 0;
+        if (sortBy === 'date') res = dateB - dateA;
+        if (sortBy === 'name') res = a.name.localeCompare(b.name);
+        if (sortBy === 'size') res = b.size - a.size;
+        
+        return sortDirection === 'asc' ? -res : res;
     });
 
     return (
-        <ModalRoot {...props} size={ModalSize.LARGE}>
-            <ModalHeader style={{ flexDirection: "column", alignItems: "start", gap: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
-                    <Text variant="heading-lg/bold">Upload Manager</Text>
+        <ModalRoot {...props} size={ModalSize.LARGE} style={{ height: "80vh", width: "80vw", maxHeight: "800px", maxWidth: "1000px" }}>
+            <div style={{ display: 'flex', height: '100%', flexDirection: 'row' }}>
+                {/* SIDEBAR */}
+                <div style={{ 
+                    width: '240px', 
+                    backgroundColor: 'var(--background-secondary)', 
+                    padding: '24px 16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    borderRight: '1px solid var(--background-modifier-accent)'
+                }}>
+                    <Text variant="heading-lg/extrabold" style={{ marginBottom: '16px', paddingLeft: '8px' }}>
+                        File Splitter
+                    </Text>
                     
-                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                        {tab === 'YOUR_UPLOADS' && (
-                            <>
-                                <input 
-                                    type="file" 
-                                    id="header-upload-input"
-                                    style={{ display: 'none' }} 
-                                    onChange={(e) => {
-                                        if (e.target.files?.[0]) UploadManager.startUpload(e.target.files[0], 9.5);
-                                        e.target.value = "";
-                                    }} 
-                                />
-                                <Button size={Button.Sizes.SMALL} onClick={() => document.getElementById('header-upload-input')?.click()}>
-                                    New Upload
-                                </Button>
-                            </>
-                        )}
-                        <ModalCloseButton onClick={props.onClose} />
+                    <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '8px', paddingLeft: '8px' }}>Manager</Text>
+                    <SidebarItem label="Your Uploads" selected={tab === 'YOUR_UPLOADS'} onClick={() => setTab('YOUR_UPLOADS')} />
+                    <SidebarItem label="All Uploads" selected={tab === 'ALL_UPLOADS'} onClick={() => setTab('ALL_UPLOADS')} />
+                    <SidebarItem label="Current Channel" selected={tab === 'CURRENT_CHANNEL'} onClick={() => setTab('CURRENT_CHANNEL')} />
+                    
+                    <div style={{ flexGrow: 1 }} />
+                    
+                    <div style={{ padding: '8px', backgroundColor: 'var(--background-tertiary)', borderRadius: '8px' }}>
+                        <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Actions</Text>
+                        <input 
+                            type="file" 
+                            id="sidebar-upload-input"
+                            style={{ display: 'none' }} 
+                            onChange={(e) => {
+                                if (e.target.files?.[0]) UploadManager.startUpload(e.target.files[0], settings.store.chunkSize || 9.5);
+                                e.target.value = "";
+                            }} 
+                        />
+                        <Button size={Button.Sizes.SMALL} color={Button.Colors.BRAND} style={{ width: '100%' }} onClick={() => document.getElementById('sidebar-upload-input')?.click()}>
+                            New Upload
+                        </Button>
                     </div>
                 </div>
 
-                <div style={{ display: "flex", gap: "8px", width: "100%" }}>
-                    <TextInput 
-                        placeholder="Search files..."
-                        value={searchQuery}
-                        onChange={setSearchQuery}
-                        style={{ flexGrow: 1 }}
-                    />
-                    {/* Sort Dropdown simulated with buttons for now */}
-                    <Button size={Button.Sizes.MIN} look={Button.Looks.OUTLINED} onClick={() => setSortBy(sortBy === 'date' ? 'name' : sortBy === 'name' ? 'size' : 'date')}>
-                        Sort: {sortBy.toUpperCase()}
-                    </Button>
-                </div>
+                {/* CONTENT AREA */}
+                <div style={{ flex: 1, padding: '32px 40px', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background-primary)', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                        <Text variant="heading-xl/bold">{
+                            tab === 'YOUR_UPLOADS' ? 'Your Uploads' :
+                            tab === 'ALL_UPLOADS' ? 'All Uploads' : 'Current Channel'
+                        }</Text>
+                        <ModalCloseButton onClick={props.onClose} />
+                    </div>
 
-                <TabBar selectedItem={tab} onItemSelect={setTab} type="top">
-                    <TabBar.Item id="YOUR_UPLOADS">Your Uploads</TabBar.Item>
-                    <TabBar.Item id="ALL_UPLOADS">All Uploads</TabBar.Item>
-                    <TabBar.Item id="CURRENT_CHANNEL">Current Channel</TabBar.Item>
-                </TabBar>
-
-                {/* Sub-toolbar for specific tabs */}
-                <div style={{ display: "flex", gap: "8px", alignItems: "center", width: "100%" }}>
-                    {tab === 'CURRENT_CHANNEL' && (
-                        <>
+                    {/* TOOLBAR */}
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: "end" }}>
+                        <div style={{ flexGrow: 1, minWidth: '200px' }}>
+                            <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Search</Text>
                             <TextInput 
-                                placeholder="Limit"
-                                value={scanLimit} 
-                                onChange={setScanLimit}
-                                style={{ width: "60px" }}
+                                placeholder="Filename..." 
+                                value={searchQuery} 
+                                onChange={setSearchQuery} 
                             />
-                            <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
-                                {isScanning ? "Scanning..." : "Scan Channel"}
-                            </Button>
-                        </>
-                    )}
+                        </div>
+                        
+                        <div>
+                            <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Sort By</Text>
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                                <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortBy(sortBy === 'date' ? 'name' : sortBy === 'name' ? 'size' : 'date')}>
+                                    {sortBy === 'date' ? 'Date' : sortBy === 'name' ? 'Name' : 'Size'}
+                                </Button>
+                                <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
+                                    {sortDirection === 'asc' ? '↑' : '↓'}
+                                </Button>
+                            </div>
+                        </div>
+
+                        {tab === 'CURRENT_CHANNEL' && (
+                            <div>
+                                <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Scanner</Text>
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                    <TextInput 
+                                        placeholder="100"
+                                        value={scanLimit} 
+                                        onChange={setScanLimit}
+                                        style={{ width: "60px" }}
+                                    />
+                                    <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
+                                        {isScanning ? "..." : "Scan"}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* FILTERS ROW */}
                     {tab !== 'YOUR_UPLOADS' && (
-                        <TextInput 
-                            placeholder="Filter User ID" 
-                            value={filterUserId} 
-                            onChange={setFilterUserId}
-                            style={{ width: "120px" }}
-                        />
+                        <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+                            <TextInput 
+                                placeholder="Filter by User ID" 
+                                value={filterUserId} 
+                                onChange={setFilterUserId}
+                                style={{ flex: 1 }}
+                            />
+                            {tab === 'ALL_UPLOADS' && (
+                                <TextInput 
+                                    placeholder="Filter by Channel ID" 
+                                    value={filterChannelId} 
+                                    onChange={setFilterChannelId}
+                                    style={{ flex: 1 }}
+                                />
+                            )}
+                        </div>
                     )}
-                    {tab === 'ALL_UPLOADS' && (
-                        <TextInput 
-                            placeholder="Filter Channel ID" 
-                            value={filterChannelId} 
-                            onChange={setFilterChannelId}
-                            style={{ width: "120px" }}
-                        />
-                    )}
-                </div>
 
-            </ModalHeader>
-
-            <ModalContent>
-                <div style={{ padding: "16px 0" }}>
-                    {displayList.length === 0 ? (
-                        <Text variant="text-md/normal" color="text-muted" style={{ textAlign: "center" }}>
-                            No files found.
-                        </Text>
-                    ) : (
-                        displayList.map((item: any) => (
-                            tab === 'YOUR_UPLOADS' 
-                                ? <UploadRow key={item.id} session={item} />
-                                : <DownloadRow key={item.id} session={item} />
-                        ))
-                    )}
+                    {/* LIST */}
+                    <div className="upload-list" style={{ overflowY: 'auto', flex: 1, paddingRight: '8px' }}>
+                        {displayList.length === 0 ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '40px', opacity: 0.5 }}>
+                                <Text variant="heading-lg/semibold">No files found</Text>
+                                <Text variant="text-md/normal">Try scanning or adjusting filters</Text>
+                            </div>
+                        ) : (
+                            displayList.map((item: any) => (
+                                tab === 'YOUR_UPLOADS' 
+                                    ? <UploadRow key={item.id} session={item} />
+                                    : <DownloadRow key={item.id} session={item} />
+                            ))
+                        )}
+                    </div>
                 </div>
-            </ModalContent>
+            </div>
         </ModalRoot>
     );
 };
