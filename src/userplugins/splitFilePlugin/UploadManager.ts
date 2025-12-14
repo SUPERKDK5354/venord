@@ -188,28 +188,8 @@ export class UploadManager {
 
         console.log(`[UploadManager] Starting upload for ${session.name} (ID: ${session.id})`);
 
-        // Checksum
-        if (!session.completedIndices.has(-1)) { // Use -1 as "checksum calculated" flag? No, just check if we have it? 
-            // Actually, we don't store checksum in session object in interface?
-            // Wait, the interface in UploadManager didn't have checksum field. I should add it.
-            // But for now let's just calculate it.
-            // To avoid re-calc on resume, we should check if we already did it.
-            // But we didn't add it to interface.
-            // I'll add logic to calc it every time for now or assume it's fast enough.
-            // Actually, better to just calc it.
-            
-            // To ensure we don't block UI, we can do it.
-            // Logs for user verification:
-            console.log(`[FileSplitter] Calculating checksum for ${session.name}...`);
-            // We need to store it to pass to metadata.
-            // I'll stick it in the session object as a custom prop if TS allows or just calc it once.
-            // Let's add it to metadata directly.
-        }
-
         let fileChecksum: string | undefined;
         try {
-             // Optimized: Only calc if not already known (persistence needed for "known")
-             // For now, always calc.
              fileChecksum = await calculateChecksum(session.file);
              console.log(`[FileSplitter] Original Checksum for ${session.name}: ${fileChecksum}`);
         } catch (e) {
@@ -217,20 +197,36 @@ export class UploadManager {
         }
 
         try {
+            const pendingIndices = [];
             for (let i = 0; i < session.totalChunks; i++) {
-                if (session.isPaused || session.controller.signal.aborted) {
-                    session.status = 'paused';
-                    this.emitChange();
-                    return;
-                }
+                if (!session.completedIndices.has(i)) pendingIndices.push(i);
+            }
 
-                if (session.completedIndices.has(i)) continue;
+            const parallel = settings.store.parallelUploads;
+            const concurrency = parallel ? (settings.store.parallelCount || 2) : 1;
+            
+            // Queue system
+            let activeCount = 0;
+            let index = 0;
 
-                // Upload Chunk
+            // Using a simple promise-based worker pool equivalent
+            // We loop until all pending indices are processed
+            
+            const processChunk = async (i: number) => {
                 const start = i * session.chunkSize;
                 const end = Math.min(start + session.chunkSize, session.size);
-                const chunkBlob = session.file.slice(start, end);
+                const chunkBlob = session.file!.slice(start, end);
                 const chunkFile = new File([chunkBlob], `${session.name.replace(/[^a-zA-Z0-9.-]/g, "_")}.part${String(i + 1).padStart(3, '0')}`);
+
+                let chunkChecksum: string | undefined;
+                try {
+                    // Quick SHA-256 for the chunk
+                    const buffer = await chunkBlob.arrayBuffer();
+                    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+                    chunkChecksum = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+                } catch (e) {
+                    console.warn(`Failed to calc chunk checksum for ${i}`, e);
+                }
 
                 const metadata = {
                     type: "FileSplitterChunk",
@@ -239,7 +235,8 @@ export class UploadManager {
                     originalName: session.name,
                     originalSize: session.size,
                     timestamp: session.id,
-                    checksum: fileChecksum
+                    checksum: fileChecksum, // Global checksum
+                    chunkChecksum: chunkChecksum // Per-chunk checksum
                 };
 
                 const msg = await this.uploadChunk(chunkFile, metadata, session.channelId, session.controller.signal);
@@ -248,8 +245,52 @@ export class UploadManager {
                 session.completedIndices.add(i);
                 this.updateProgress(session);
                 this.emitChange();
-                
-                await new Promise(r => setTimeout(r, 1000));
+            };
+
+            const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+            while (index < pendingIndices.length || activeCount > 0) {
+                if (session.isPaused || session.controller.signal.aborted) {
+                    session.status = 'paused';
+                    this.emitChange();
+                    return;
+                }
+
+                // Start new tasks if we have slots
+                while (activeCount < concurrency && index < pendingIndices.length && !session.isPaused) {
+                    const idx = pendingIndices[index++];
+                    activeCount++;
+                    
+                    // Don't await here, let it run in bg
+                    processChunk(idx).then(() => {
+                        activeCount--;
+                    }).catch(e => {
+                        activeCount--;
+                        // If it aborted, we'll catch it in next loop or outer catch
+                        if (!session.controller.signal.aborted) {
+                            console.error(`Chunk ${idx} failed`, e);
+                            // Simple retry logic could go here, or just fail session
+                            session.controller.abort();
+                            throw e; 
+                        }
+                    });
+
+                    // Add delay between STARTING uploads to avoid blasting API
+                    // If parallel, this delay acts as a staggered start
+                    // If sequential, this is the delay between chunks
+                    const base = settings.store.baseDelay || 1500;
+                    const jitter = settings.store.jitter || 1000;
+                    const delay = base + Math.random() * jitter;
+                    await sleep(delay);
+                }
+
+                // Small wait loop to prevent tight CPU spin while waiting for workers
+                if (activeCount > 0) {
+                    await sleep(100);
+                } else if (index >= pendingIndices.length) {
+                    // All submitted and active count is 0
+                    break;
+                }
             }
 
             session.status = 'completed';
@@ -268,7 +309,7 @@ export class UploadManager {
         }
     }
 
-    private static uploadChunk(file: File, metadata: any, channelId: string, signal: AbortSignal): Promise<any> {
+    public static uploadChunk(file: File, metadata: any, channelId: string, signal: AbortSignal): Promise<any> {
         return new Promise((resolve, reject) => {
             if (signal.aborted) return reject(new Error("Aborted"));
 

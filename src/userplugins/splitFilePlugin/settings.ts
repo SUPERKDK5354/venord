@@ -17,5 +17,35 @@ export const settings = definePluginSettings({
         type: OptionType.STRING,
         default: "{}",
         hidden: true // Hide from settings panel now that we have a GUI
+    },
+    parallelUploads: {
+        type: OptionType.BOOLEAN,
+        default: false,
+        description: "Enable Parallel Uploading (Warning: Higher risk of rate limits)",
+    },
+    parallelCount: {
+        type: OptionType.NUMBER,
+        default: 2,
+        description: "Number of parallel uploads (Max 5 recommended)",
+    },
+    parallelDownloading: {
+        type: OptionType.BOOLEAN,
+        default: true,
+        description: "Enable Parallel Downloading",
+    },
+    downloadWorkers: {
+        type: OptionType.NUMBER,
+        default: 3,
+        description: "Number of parallel download streams (Max 5 recommended)",
+    },
+    baseDelay: {
+        type: OptionType.NUMBER,
+        default: 1500,
+        description: "Base Delay between uploads (ms)",
+    },
+    jitter: {
+        type: OptionType.NUMBER,
+        default: 1000,
+        description: "Random Jitter added to delay (ms)",
     }
 });

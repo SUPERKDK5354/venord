@@ -1,5 +1,6 @@
 import { RestAPI, Constants, Toasts, showToast } from "@webpack/common";
 import { calculateChecksum, ChunkManager, DetectedFileSession, StoredFileChunk, isValidChunk } from "./ChunkManager";
+import { settings } from "./settings";
 
 export interface DownloadState {
     sessionId: number;
@@ -147,50 +148,90 @@ export class DownloadManager {
     }
 
     private static async downloadLoop(dl: DownloadState, session: DetectedFileSession) {
-        // Initialize storage if needed (using a cast since I didn't add it to interface above yet)
+        // Initialize storage if needed
         const state = dl as any; 
         if (!state.blobs) state.blobs = new Map<number, Blob>();
 
-        const sortedChunks = [...session.chunks].sort((a, b) => a.index - b.index);
-        
+        const pendingChunks = [...session.chunks]
+            .sort((a, b) => a.index - b.index)
+            .filter(c => !state.blobs.has(c.index)); // Only queue missing chunks
+
+        const parallel = settings.store.parallelDownloading ?? true;
+        const concurrency = parallel ? (settings.store.downloadWorkers || 3) : 1;
+
+        let activeCount = 0;
+        let index = 0;
+
+        const processChunk = async (chunk: StoredFileChunk) => {
+            if (dl.isPaused || dl.controller.signal.aborted) return;
+
+            const fetcher = (window as any).VencordNative?.net?.fetch;
+            if (!fetcher) throw new Error("VencordNative fetch missing");
+
+            // console.log(`[DownloadManager] Fetching chunk ${chunk.index}...`);
+            const arrayBuffer = await fetcher(chunk.url);
+            if (!arrayBuffer) throw new Error(`Fetch failed for chunk ${chunk.index}`);
+            
+            const blob = new Blob([arrayBuffer]);
+            state.blobs.set(chunk.index, blob);
+            dl.chunksDownloaded.add(chunk.index);
+            
+            // Update Stats
+            dl.bytesDownloaded += blob.size;
+            const now = Date.now();
+            const elapsed = (now - dl.startTime) / 1000;
+            if (elapsed > 0) {
+                dl.speed = dl.bytesDownloaded / elapsed;
+                dl.etr = (dl.totalBytes - dl.bytesDownloaded) / dl.speed;
+            }
+            this.emitChange();
+        };
+
+        const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
         try {
-            for (const chunk of sortedChunks) {
+            while (index < pendingChunks.length || activeCount > 0) {
                 if (dl.isPaused || dl.controller.signal.aborted) {
                     dl.status = 'paused';
                     this.emitChange();
                     return;
                 }
 
-                if (state.blobs.has(chunk.index)) {
-                    // Already downloaded
-                    continue; 
+                // Start new tasks
+                while (activeCount < concurrency && index < pendingChunks.length && !dl.isPaused) {
+                    const chunk = pendingChunks[index++];
+                    activeCount++;
+                    
+                    processChunk(chunk).then(() => {
+                        activeCount--;
+                    }).catch(e => {
+                        activeCount--;
+                        if (!dl.controller.signal.aborted) {
+                            console.error(`Chunk ${chunk.index} failed`, e);
+                            dl.error = `Chunk ${chunk.index} failed`;
+                            // Ideally retries? For now fail or continue? 
+                            // Let's just continue, it will remain in pending for next retry?
+                            // No, we filtered pending at start.
+                            // Simple retry logic:
+                            dl.controller.abort(); 
+                        }
+                    });
                 }
 
-                // Download Chunk
-                const fetcher = (window as any).VencordNative?.net?.fetch;
-                if (!fetcher) throw new Error("VencordNative fetch missing");
-
-                const arrayBuffer = await fetcher(chunk.url);
-                if (!arrayBuffer) throw new Error("Fetch failed");
-                
-                const blob = new Blob([arrayBuffer]);
-                state.blobs.set(chunk.index, blob);
-                dl.chunksDownloaded.add(chunk.index);
-                
-                // Update Stats
-                dl.bytesDownloaded += blob.size;
-                const now = Date.now();
-                const elapsed = (now - dl.startTime) / 1000;
-                if (elapsed > 0) {
-                    dl.speed = dl.bytesDownloaded / elapsed;
-                    dl.etr = (dl.totalBytes - dl.bytesDownloaded) / dl.speed;
-                }
-                this.emitChange();
+                if (activeCount > 0) await sleep(50);
+                else if (index >= pendingChunks.length) break;
             }
+
+            if (dl.controller.signal.aborted) return;
 
             // Merge
             dl.status = 'merging';
             this.emitChange();
+
+            // Check if we actually have all chunks
+            if (state.blobs.size !== session.totalChunks) {
+                throw new Error(`Download incomplete: ${state.blobs.size}/${session.totalChunks}`);
+            }
 
             const orderedBlobs: Blob[] = [];
             for (let i = 0; i < session.totalChunks; i++) {
@@ -201,7 +242,7 @@ export class DownloadManager {
             dl.fileBlob = finalBlob; // Store ready for save
 
             // Checksum
-            if (session.chunks[0].checksum) { // Checksum is usually repeated in all chunks or just first
+            if (session.chunks[0].checksum) { 
                 const calculated = await calculateChecksum(finalBlob);
                 if (calculated === session.chunks[0].checksum) {
                     dl.checksumResult = 'pass';

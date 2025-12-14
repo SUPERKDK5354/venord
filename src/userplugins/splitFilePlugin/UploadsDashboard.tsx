@@ -23,8 +23,11 @@ const SidebarItem = ({ label, selected, onClick }: { label: string, selected: bo
     </div>
 );
 
-export const UploadsDashboard = (props: any) => {
-    const [tab, setTab] = useState("YOUR_UPLOADS");
+export const UploadsDashboard = (props: { initialTab?: string } & any) => {
+    // Use the settings.use() hook to ensure re-renders when settings change
+    const pluginSettings = settings.use(); 
+    
+    const [tab, setTab] = useState(props.initialTab || "YOUR_UPLOADS");
     const [uploads, setUploads] = useState<UploadSession[]>([]);
     const [detectedFiles, setDetectedFiles] = useState<DetectedFileSession[]>([]);
     
@@ -116,6 +119,7 @@ export const UploadsDashboard = (props: any) => {
                     <SidebarItem label="Your Uploads" selected={tab === 'YOUR_UPLOADS'} onClick={() => setTab('YOUR_UPLOADS')} />
                     <SidebarItem label="All Uploads" selected={tab === 'ALL_UPLOADS'} onClick={() => setTab('ALL_UPLOADS')} />
                     <SidebarItem label="Current Channel" selected={tab === 'CURRENT_CHANNEL'} onClick={() => setTab('CURRENT_CHANNEL')} />
+                    <SidebarItem label="Settings" selected={tab === 'SETTINGS'} onClick={() => setTab('SETTINGS')} />
                     
                     <div style={{ flexGrow: 1 }} />
                     
@@ -141,7 +145,8 @@ export const UploadsDashboard = (props: any) => {
                 <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
                     <Text variant="heading-xl/bold">{
                         tab === 'YOUR_UPLOADS' ? 'Your Uploads' :
-                        tab === 'ALL_UPLOADS' ? 'All Uploads' : 'Current Channel'
+                        tab === 'ALL_UPLOADS' ? 'All Uploads' :
+                        tab === 'SETTINGS' ? 'Settings' : 'Current Channel'
                     }</Text>
                     <div style={{ display: "flex", gap: "8px" }}>
                         <Button size={Button.Sizes.SMALL} look={Button.Looks.BLANK} onClick={() => { ChunkManager.emitChange(); UploadManager.emitChange(); }}>
@@ -151,6 +156,136 @@ export const UploadsDashboard = (props: any) => {
                     </div>
                 </div>
 
+                    {tab === 'SETTINGS' ? (
+                        <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '24px', overflowY: 'auto' }}>
+                            <div style={{ padding: '16px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' }}>
+                                <Text variant="heading-md/bold" style={{ marginBottom: '8px' }}>Performance & Safety</Text>
+                                
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div>
+                                        <Text variant="text-md/semibold">Parallel Uploading</Text>
+                                        <Text variant="text-xs/normal" color="text-muted">Simultaneous uploads increase speed but risk rate limits.</Text>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={settings.store.parallelUploads} 
+                                        onChange={() => settings.store.parallelUploads = !settings.store.parallelUploads} 
+                                        style={{ transform: 'scale(1.5)' }}
+                                    />
+                                </div>
+
+                                {settings.store.parallelUploads && (
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
+                                            Worker Count ({settings.store.parallelCount || 2})
+                                        </Text>
+                                        <input 
+                                            type="range" 
+                                            min="2" max="5" 
+                                            value={settings.store.parallelCount || 2} 
+                                            onChange={(e) => settings.store.parallelCount = parseInt(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        />
+                                    </div>
+                                )}
+
+                                <div style={{ marginBottom: '16px' }}>
+                                    <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
+                                        Base Delay ({settings.store.baseDelay || 1500}ms)
+                                    </Text>
+                                    <input 
+                                        type="range" 
+                                        min="500" max="5000" step="100"
+                                        value={settings.store.baseDelay || 1500} 
+                                        onChange={(e) => settings.store.baseDelay = parseInt(e.target.value)}
+                                        style={{ width: '100%' }}
+                                    />
+                                </div>
+
+                                <div style={{ marginBottom: '16px' }}>
+                                    <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
+                                        Random Jitter ({settings.store.jitter || 1000}ms)
+                                    </Text>
+                                    <Text variant="text-xs/normal" color="text-muted" style={{ marginBottom: '8px' }}>
+                                        Adds 0-{settings.store.jitter || 1000}ms random delay to mimic human behavior.
+                                    </Text>
+                                    <input 
+                                        type="range" 
+                                        min="0" max="3000" step="100"
+                                        value={settings.store.jitter || 1000} 
+                                        onChange={(e) => settings.store.jitter = parseInt(e.target.value)}
+                                        style={{ width: '100%' }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '16px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' }}>
+                                <Text variant="heading-md/bold" style={{ marginBottom: '8px' }}>Downloads</Text>
+                                
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div>
+                                        <Text variant="text-md/semibold">Parallel Downloading</Text>
+                                        <Text variant="text-xs/normal" color="text-muted">Download multiple chunks simultaneously.</Text>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={settings.store.parallelDownloading ?? true} 
+                                        onChange={() => settings.store.parallelDownloading = !settings.store.parallelDownloading} 
+                                        style={{ transform: 'scale(1.5)' }}
+                                    />
+                                </div>
+
+                                {settings.store.parallelDownloading !== false && (
+                                    <div style={{ marginBottom: '16px' }}>
+                                        <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
+                                            Download Workers ({settings.store.downloadWorkers || 3})
+                                        </Text>
+                                        <input 
+                                            type="range" 
+                                            min="2" max="10" 
+                                            value={settings.store.downloadWorkers || 3} 
+                                            onChange={(e) => settings.store.downloadWorkers = parseInt(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            <div style={{ padding: '16px', backgroundColor: 'var(--background-secondary)', borderRadius: '8px' }}>
+                                <Text variant="heading-md/bold" style={{ marginBottom: '8px' }}>Core</Text>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div>
+                                        <Text variant="text-md/semibold">Bypass 500MB Limit</Text>
+                                        <Text variant="text-xs/normal" color="text-muted">Allow selecting files larger than 500MB.</Text>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={settings.store.bypassLimit} 
+                                        onChange={() => settings.store.bypassLimit = !settings.store.bypassLimit} 
+                                        style={{ transform: 'scale(1.5)' }}
+                                    />
+                                </div>
+                                <div style={{ marginBottom: '16px' }}>
+                                    <Text variant="text-md/semibold" style={{ marginBottom: '8px' }}>Chunk Size</Text>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        {[9.5, 49, 99, 499].map(size => (
+                                            <Button 
+                                                key={size}
+                                                size={Button.Sizes.SMALL} 
+                                                look={settings.store.chunkSize === size ? Button.Looks.FILLED : Button.Looks.OUTLINED}
+                                                color={settings.store.chunkSize === size ? Button.Colors.BRAND : Button.Colors.PRIMARY}
+                                                onClick={() => settings.store.chunkSize = size}
+                                            >
+                                                {size} MB
+                                            </Button>
+                                        ))}
+                                    </div>
+                                    <Text variant="text-xs/normal" color="text-muted" style={{ marginTop: '8px' }}>Files are split into chunks of this size (MB).</Text>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                    <>
                     {/* TOOLBAR */}
                     <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: "end" }}>
                         <div style={{ flexGrow: 1, minWidth: '200px' }}>
@@ -227,6 +362,8 @@ export const UploadsDashboard = (props: any) => {
                             ))
                         )}
                     </div>
+                    </>
+                    )}
                 </div>
             </div>
         </ModalRoot>

@@ -165,25 +165,11 @@ const SplitFileComponent = () => {
                     label="Manage Uploads" 
                     action={() => openModal(props => <UploadsDashboard {...props} />)} 
                 />
-                <Menu.MenuGroup label="Settings">
-                    <Menu.MenuCheckboxItem
-                        id="bypass-limit"
-                        label="Allow >500MB Uploads"
-                        checked={settings.store.bypassLimit}
-                        action={() => settings.store.bypassLimit = !settings.store.bypassLimit}
-                    />
-                </Menu.MenuGroup>
-                <Menu.MenuGroup label="Chunk Size">
-                    {[9.5, 49, 99, 499].map(size => (
-                        <Menu.MenuRadioItem
-                            key={size}
-                            id={`size-${size}`}
-                            label={`${size} MB`}
-                            checked={settings.store.chunkSize === size}
-                            action={() => settings.store.chunkSize = size}
-                        />
-                    ))}
-                </Menu.MenuGroup>
+                <Menu.MenuItem 
+                    id="file-splitter-settings" 
+                    label="File Splitter Settings" 
+                    action={() => openModal(props => <UploadsDashboard initialTab="SETTINGS" {...props} />)} 
+                />
             </Menu.Menu>
         ));
     }, []);
