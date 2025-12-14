@@ -1,13 +1,14 @@
 import { CloudUploadPlatform } from "@vencord/discord-types/enums";
 import * as webpack from "@webpack";
 import { RestAPI, Constants, SnowflakeUtils, Toasts, showToast, SelectedChannelStore as ChannelStore } from "@webpack/common";
+import { calculateChecksum } from "./ChunkManager";
 import { settings } from "./settings";
 
 const CloudUpload = webpack.findLazy(m => m.prototype?.trackUploadFinished);
 
 export interface UploadSession {
     id: number;
-    file?: File; // Optional because it might be missing after reload
+    file?: File;
     name: string;
     size: number;
     status: 'pending' | 'uploading' | 'paused' | 'completed' | 'error';
@@ -22,6 +23,7 @@ export interface UploadSession {
     error?: string;
     controller: AbortController;
     isPaused: boolean;
+    lastMessageId?: string; // For "Go to message"
 }
 
 type Listener = () => void;
@@ -40,7 +42,6 @@ export class UploadManager {
         this.saveState();
     }
 
-    // Call this from the plugin 'start()' method
     static init() {
         this.loadState();
     }
@@ -50,7 +51,6 @@ export class UploadManager {
             const raw = settings.store.pendingUploads || "{}";
             const data = JSON.parse(raw);
             Object.values(data).forEach((s: any) => {
-                // Restore session without File object
                 this.sessions.set(s.id, {
                     ...s,
                     status: 'paused',
@@ -116,18 +116,14 @@ export class UploadManager {
         const session = this.sessions.get(id);
         if (!session) return;
 
-        // If we don't have the file object (e.g. after reload), we need it passed in
         if (!session.file) {
             if (file) {
-                // Verify file matches
                 if (file.name !== session.name || file.size !== session.size) {
                     showToast("File mismatch! Select the original file.", Toasts.Type.FAILURE);
                     return;
                 }
                 session.file = file;
             } else {
-                // We need to ask for the file. 
-                // The UI should handle asking the user to pick the file, then call this method with it.
                 showToast("Missing file object. Please select the file again.", Toasts.Type.FAILURE);
                 return;
             }
@@ -137,6 +133,8 @@ export class UploadManager {
 
         session.isPaused = false;
         session.status = 'pending';
+        // Reset controller for new attempt
+        session.controller = new AbortController();
         this.emitChange();
         this.processUpload(session);
     }
@@ -146,6 +144,7 @@ export class UploadManager {
         if (session) {
             session.isPaused = true;
             session.status = 'paused';
+            session.controller.abort(); // Cancel current upload attempt
             this.emitChange();
         }
     }
@@ -154,8 +153,28 @@ export class UploadManager {
         const session = this.sessions.get(id);
         if (session) {
             session.isPaused = true;
+            session.controller.abort();
             this.sessions.delete(id);
             this.emitChange();
+        }
+    }
+
+    private static updateProgress(session: UploadSession) {
+        let uploaded = 0;
+        session.completedIndices.forEach(idx => {
+            const isLast = idx === session.totalChunks - 1;
+            const size = isLast ? (session.size % session.chunkSize || session.chunkSize) : session.chunkSize;
+            uploaded += size;
+        });
+        session.bytesUploaded = uploaded;
+        
+        const now = Date.now();
+        const elapsed = (now - session.startTime) / 1000;
+        
+        if (elapsed > 0) {
+            session.speed = session.bytesUploaded / elapsed;
+            const remaining = session.size - session.bytesUploaded;
+            session.etr = session.speed > 0 ? remaining / session.speed : 0;
         }
     }
 
@@ -164,15 +183,42 @@ export class UploadManager {
 
         session.status = 'uploading';
         session.startTime = Date.now();
-        // Recalculate bytes uploaded so far
-        session.bytesUploaded = session.completedIndices.size * session.chunkSize;
+        this.updateProgress(session);
         this.emitChange();
 
         console.log(`[UploadManager] Starting upload for ${session.name} (ID: ${session.id})`);
 
+        // Checksum
+        if (!session.completedIndices.has(-1)) { // Use -1 as "checksum calculated" flag? No, just check if we have it? 
+            // Actually, we don't store checksum in session object in interface?
+            // Wait, the interface in UploadManager didn't have checksum field. I should add it.
+            // But for now let's just calculate it.
+            // To avoid re-calc on resume, we should check if we already did it.
+            // But we didn't add it to interface.
+            // I'll add logic to calc it every time for now or assume it's fast enough.
+            // Actually, better to just calc it.
+            
+            // To ensure we don't block UI, we can do it.
+            // Logs for user verification:
+            console.log(`[FileSplitter] Calculating checksum for ${session.name}...`);
+            // We need to store it to pass to metadata.
+            // I'll stick it in the session object as a custom prop if TS allows or just calc it once.
+            // Let's add it to metadata directly.
+        }
+
+        let fileChecksum: string | undefined;
+        try {
+             // Optimized: Only calc if not already known (persistence needed for "known")
+             // For now, always calc.
+             fileChecksum = await calculateChecksum(session.file);
+             console.log(`[FileSplitter] Original Checksum for ${session.name}: ${fileChecksum}`);
+        } catch (e) {
+            console.warn("Checksum failed", e);
+        }
+
         try {
             for (let i = 0; i < session.totalChunks; i++) {
-                if (session.isPaused) {
+                if (session.isPaused || session.controller.signal.aborted) {
                     session.status = 'paused';
                     this.emitChange();
                     return;
@@ -192,46 +238,40 @@ export class UploadManager {
                     total: session.totalChunks,
                     originalName: session.name,
                     originalSize: session.size,
-                    timestamp: session.id
+                    timestamp: session.id,
+                    checksum: fileChecksum
                 };
 
-                await this.uploadChunk(chunkFile, metadata, session.channelId);
+                const msg = await this.uploadChunk(chunkFile, metadata, session.channelId, session.controller.signal);
+                if (msg) session.lastMessageId = msg.id;
 
-                // Update Progress & Stats
                 session.completedIndices.add(i);
-                
-                const now = Date.now();
-                const elapsed = (now - session.startTime) / 1000;
-                session.bytesUploaded += chunkFile.size;
-                
-                if (elapsed > 0) {
-                    session.speed = session.bytesUploaded / elapsed; // B/s
-                    const remainingBytes = session.size - session.bytesUploaded;
-                    session.etr = remainingBytes / session.speed;
-                }
-
+                this.updateProgress(session);
                 this.emitChange();
                 
-                // Rate limit delay
                 await new Promise(r => setTimeout(r, 1000));
             }
 
             session.status = 'completed';
             this.emitChange();
             showToast(`Upload complete: ${session.name}`, Toasts.Type.SUCCESS);
-            // Auto-delete from list after a while? Or keep it?
-            // Keep for now.
 
         } catch (e: any) {
-            console.error("Upload failed", e);
-            session.status = 'error';
-            session.error = e.message;
+            if (session.controller.signal.aborted) {
+                session.status = 'paused';
+            } else {
+                console.error("Upload failed", e);
+                session.status = 'error';
+                session.error = e.message;
+            }
             this.emitChange();
         }
     }
 
-    private static uploadChunk(file: File, metadata: any, channelId: string): Promise<void> {
+    private static uploadChunk(file: File, metadata: any, channelId: string, signal: AbortSignal): Promise<any> {
         return new Promise((resolve, reject) => {
+            if (signal.aborted) return reject(new Error("Aborted"));
+
             const upload = new CloudUpload({
                 file,
                 isClip: false,
@@ -239,7 +279,14 @@ export class UploadManager {
                 platform: CloudUploadPlatform.WEB
             }, channelId, false, 0);
 
+            const abortHandler = () => {
+                upload.cancel && upload.cancel(); // Try to cancel
+                reject(new Error("Aborted"));
+            };
+            signal.addEventListener('abort', abortHandler);
+
             upload.on("complete", () => {
+                signal.removeEventListener('abort', abortHandler);
                 if (!upload.uploadedFilename) return reject(new Error("No uploadedFilename"));
                 
                 RestAPI.post({
@@ -256,10 +303,13 @@ export class UploadManager {
                             file_size: file.size
                         }]
                     }
-                }).then(() => resolve()).catch(reject);
+                }).then(resolve).catch(reject);
             });
 
-            upload.on("error", (err: any) => reject(err));
+            upload.on("error", (err: any) => {
+                signal.removeEventListener('abort', abortHandler);
+                reject(err);
+            });
             upload.upload();
         });
     }

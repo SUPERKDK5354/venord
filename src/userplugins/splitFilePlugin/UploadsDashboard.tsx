@@ -1,6 +1,8 @@
 import { ModalCloseButton, ModalContent, ModalHeader, ModalRoot, ModalSize } from "@utils/modal";
-import { Button, Text, useEffect, useRef, useState } from "@webpack/common";
+import { Button, Text, MessageActions, SelectedChannelStore, useEffect, useRef, useState } from "@webpack/common";
 import { UploadManager, UploadSession } from "./UploadManager";
+import { ChunkManager, handleFileMerge } from "./ChunkManager";
+import { settings } from "./settings";
 
 // Helper for formatting bytes
 const formatSize = (bytes: number) => {
@@ -21,14 +23,14 @@ const formatTime = (seconds: number) => {
 
 const UploadRow = ({ session }: { session: UploadSession }) => {
     const progress = Math.round((session.completedIndices.size / session.totalChunks) * 100);
-    const isPaused = session.status === 'paused' || session.status === 'pending'; // Treat pending as paused for UI
+    const isPaused = session.status === 'paused' || session.status === 'pending';
     const isError = session.status === 'error';
     const isDone = session.status === 'completed';
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isMerging, setIsMerging] = useState(false);
 
     const handleResume = () => {
         if (!session.file) {
-            // Need to re-select file
             fileInputRef.current?.click();
         } else {
             UploadManager.resumeUpload(session.id);
@@ -42,6 +44,35 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
         }
         e.target.value = "";
     };
+
+    const handleJump = () => {
+        if (session.lastMessageId && session.channelId) {
+            MessageActions.jumpToMessage({ channelId: session.channelId, messageId: session.lastMessageId, flash: true });
+        }
+    };
+
+    const handleDownload = async () => {
+        setIsMerging(true);
+        const chunks = ChunkManager.getChunks(session.id);
+        if (chunks && chunks.length === session.totalChunks) {
+            await handleFileMerge(chunks);
+        } else {
+            // Should not happen if completed
+            console.error("Missing chunks for download");
+        }
+        setIsMerging(false);
+    };
+
+    // Calculate elapsed based on startTime and now (if uploading)
+    const [elapsedDisplay, setElapsed] = useState("--");
+    useEffect(() => {
+        if (session.status !== 'uploading') return;
+        const i = setInterval(() => {
+            const now = Date.now();
+            setElapsed(formatTime((now - session.startTime) / 1000));
+        }, 1000);
+        return () => clearInterval(i);
+    }, [session.status, session.startTime]);
 
     return (
         <div style={{
@@ -60,10 +91,30 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
             />
             
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                <Text variant="text-md/bold" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <Text 
+                    variant="text-md/bold" 
+                    style={{ 
+                        overflow: "hidden", 
+                        textOverflow: "ellipsis", 
+                        whiteSpace: "nowrap", 
+                        cursor: session.lastMessageId ? "pointer" : "default",
+                        textDecoration: session.lastMessageId ? "underline" : "none"
+                    }}
+                    onClick={handleJump}
+                >
                     {session.name}
                 </Text>
                 <div style={{ display: "flex", gap: "8px" }}>
+                    {isDone && (
+                        <Button
+                            size={Button.Sizes.TINY}
+                            color={Button.Colors.BRAND}
+                            onClick={handleDownload}
+                            disabled={isMerging}
+                        >
+                            {isMerging ? "Merging..." : "Download"}
+                        </Button>
+                    )}
                     {!isDone && (
                         <Button 
                             size={Button.Sizes.TINY} 
@@ -83,7 +134,6 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
                 </div>
             </div>
 
-            {/* Progress Bar */}
             <div style={{ height: "8px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "4px", overflow: "hidden" }}>
                 <div style={{ 
                     height: "100%", 
@@ -93,21 +143,24 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
                 }} />
             </div>
 
-            {/* Stats */}
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
                 <Text variant="text-xs/normal" color="text-muted">
-                    {progress}% • {formatSize(session.completedIndices.size * session.chunkSize)} / {formatSize(session.size)}
+                    {progress}% • {formatSize(session.bytesUploaded)} / {formatSize(session.size)}
                 </Text>
-                {!isDone && !isPaused && !isError && (
-                    <Text variant="text-xs/normal" color="text-muted">
-                        {formatSize(session.speed)}/s • {formatTime(session.etr)} left
-                    </Text>
-                )}
+                
                 {isPaused && <Text variant="text-xs/normal" color="text-warning">
                     {session.file ? "Paused" : "Paused (Select file to resume)"}
                 </Text>}
+                
                 {isDone && <Text variant="text-xs/normal" color="text-positive">Completed</Text>}
+                
                 {isError && <Text variant="text-xs/normal" color="text-danger">{session.error || "Error"}</Text>}
+
+                {!isDone && !isPaused && !isError && (
+                    <Text variant="text-xs/normal" color="text-muted">
+                        {formatSize(session.speed)}/s • {elapsedDisplay} elapsed • {formatTime(session.etr)} left
+                    </Text>
+                )}
             </div>
         </div>
     );
@@ -115,20 +168,42 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
 
 export const UploadsDashboard = (props: any) => {
     const [sessions, setSessions] = useState<UploadSession[]>([]);
+    const headerInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         const update = () => {
             setSessions(Array.from(UploadManager.sessions.values()).sort((a, b) => b.id - a.id));
         };
-        update(); // Initial
+        update(); 
         return UploadManager.addListener(update);
     }, []);
+
+    const handleHeaderUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            UploadManager.startUpload(file, settings.store.chunkSize || 9.5);
+        }
+        e.target.value = "";
+    };
 
     return (
         <ModalRoot {...props} size={ModalSize.MEDIUM}>
             <ModalHeader>
-                <Text variant="heading-lg/bold">Upload Manager</Text>
-                <ModalCloseButton onClick={props.onClose} />
+                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                    <Text variant="heading-lg/bold">Upload Manager</Text>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                        <input 
+                            type="file" 
+                            ref={headerInputRef} 
+                            style={{ display: 'none' }} 
+                            onChange={handleHeaderUpload} 
+                        />
+                        <Button size={Button.Sizes.SMALL} onClick={() => headerInputRef.current?.click()}>
+                            New Upload
+                        </Button>
+                        <ModalCloseButton onClick={props.onClose} />
+                    </div>
+                </div>
             </ModalHeader>
             <ModalContent>
                 <div style={{ padding: "16px 0" }}>
