@@ -85,19 +85,11 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
         try {
             const badIndices = await ChunkManager.verifySessionAgainstFile(session.id, file);
             if (badIndices.length === 0) {
-                showNotification({
-                    title: "Verification Passed",
-                    body: `${session.name}: All chunks match the local file.`,
-                    icon: "CheckmarkLargeIcon"
-                });
+                showToast(`Verification Passed: ${session.name}`, Toasts.Type.SUCCESS);
                 setStatus("Verified");
             } else {
                 console.error("Bad chunks:", badIndices);
-                showNotification({
-                    title: "Corruption Detected",
-                    body: `${session.name}: Found ${badIndices.length} corrupt chunks. Starting repair...`,
-                    icon: "WarningIcon"
-                });
+                showToast(`Corruption Detected: ${session.name} (${badIndices.length} chunks)`, Toasts.Type.FAILURE);
                 setStatus(`Repairing ${badIndices.length} chunks...`);
 
                 const abortController = new AbortController();
@@ -141,20 +133,12 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                     await new Promise(r => setTimeout(r, 1000));
                 }
                 
-                showNotification({
-                    title: "Repair Complete",
-                    body: `${session.name}: Successfully repaired ${badIndices.length} chunks.`,
-                    icon: "CheckmarkLargeIcon"
-                });
+                showToast(`Repair Complete: ${session.name}`, Toasts.Type.SUCCESS);
                 setStatus("Repaired");
             }
         } catch (err: any) {
             console.error(err);
-            showNotification({
-                title: "Repair Failed",
-                body: `${session.name}: ${err.message}`,
-                icon: "CloseSmallIcon"
-            });
+            showToast(`Repair Failed: ${err.message}`, Toasts.Type.FAILURE);
             setStatus("Error");
         } finally {
             setIsRepairing(false);
@@ -199,25 +183,13 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                 }
 
                 if (failedChunks.length > 0) {
-                    showNotification({
-                        title: "Integrity Failed",
-                        body: `${session.name}: Corrupt chunks detected: ${failedChunks.join(', ')}`,
-                        icon: "CloseSmallIcon"
-                    });
+                    showToast(`Integrity Failed: ${session.name} (${failedChunks.length} chunks)`, Toasts.Type.FAILURE);
                     setStatus("Corrupt!");
                 } else if (verifiedCount === 0) {
-                    showNotification({
-                        title: "Verification Failed",
-                        body: `${session.name}: No chunks could be verified (missing metadata).`,
-                        icon: "WarningIcon"
-                    });
+                    showToast("Verification Failed: No chunks verified", Toasts.Type.WARNING);
                     setStatus("Unknown");
                 } else {
-                    showNotification({
-                        title: "Integrity Passed",
-                        body: `${session.name}: Successfully verified ${verifiedCount} chunks.`,
-                        icon: "CheckmarkLargeIcon"
-                    });
+                    showToast(`Integrity Passed: ${session.name}`, Toasts.Type.SUCCESS);
                     setStatus("Verified");
                 }
             } else if (session.chunks[0]?.checksum) {
@@ -232,11 +204,7 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                 }
                 
                 if (orderedBlobs.length !== session.totalChunks) {
-                    showNotification({
-                        title: "Verification Failed",
-                        body: `${session.name}: Cannot verify global checksum: Missing chunks.`,
-                        icon: "CloseSmallIcon"
-                    });
+                    showToast("Verification Failed: Missing chunks", Toasts.Type.FAILURE);
                     setIsRepairing(false);
                     return;
                 }
@@ -245,36 +213,20 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                 const hash = await calculateChecksum(finalBlob);
                 
                 if (hash === session.chunks[0].checksum) {
-                    showNotification({
-                        title: "Integrity Passed",
-                        body: `${session.name}: Global checksum matches.`,
-                        icon: "CheckmarkLargeIcon"
-                    });
+                    showToast(`Integrity Passed: ${session.name}`, Toasts.Type.SUCCESS);
                     setStatus("Verified");
                 } else {
-                    showNotification({
-                        title: "Integrity Failed",
-                        body: `${session.name}: Global checksum mismatch!`,
-                        icon: "CloseSmallIcon"
-                    });
+                    showToast(`Integrity Failed: ${session.name} (Global Mismatch)`, Toasts.Type.FAILURE);
                     setStatus("Corrupt!");
                 }
             } else {
-                showNotification({
-                    title: "Verification Unavailable",
-                    body: `${session.name}: No checksums found in metadata.`,
-                    icon: "WarningIcon"
-                });
+                showToast("Verification Unavailable: No checksums", Toasts.Type.WARNING);
                 setStatus("No Hash");
             }
 
         } catch (e: any) {
             console.error(e);
-            showNotification({
-                title: "Verification Error",
-                body: `${session.name}: ${e.message}`,
-                icon: "CloseSmallIcon"
-            });
+            showToast(`Verification Error: ${e.message}`, Toasts.Type.FAILURE);
             setStatus("Error");
         }
         setIsRepairing(false);
