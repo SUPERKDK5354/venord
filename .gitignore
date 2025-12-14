@@ -21,3 +21,6 @@ lerna-debug.log*
 
 ExtensionCache/
 /settings
+
+.gemini/
+gha-creds-*.json
