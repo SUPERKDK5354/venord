@@ -234,14 +234,22 @@ export class DownloadManager {
         try {
             while (fetched < limit) {
                 const batchSize = Math.min(50, limit - fetched);
-                const messages: any[] = await RestAPI.get({
+                const response: any = await RestAPI.get({
                     url: Constants.Endpoints.MESSAGES(channelId),
                     query: { limit: batchSize, before: beforeId }
                 });
 
-                if (!messages || messages.length === 0) break;
+                // Vencord RestAPI might return the array directly or in .body depending on version/config
+                const messages = Array.isArray(response) ? response : response.body;
 
-                messages.forEach(msg => {
+                if (!Array.isArray(messages)) {
+                    console.error("[FileSplitter] Scan received non-array:", response);
+                    break;
+                }
+
+                if (messages.length === 0) break;
+
+                messages.forEach((msg: any) => {
                     // Manual parsing because onMessageCreate isn't triggered for REST fetch
                     if (msg.content && msg.attachments?.length) {
                         try {

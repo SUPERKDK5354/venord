@@ -60,6 +60,7 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
     const isPaused = session.status === 'paused' || session.status === 'pending';
     const isDone = session.status === 'completed';
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isMerging, setIsMerging] = useState(false);
 
     const handleResume = () => {
         if (!session.file) {
@@ -77,6 +78,28 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
         e.target.value = "";
     };
 
+    const handleJump = () => {
+        if (session.lastMessageId && session.channelId) {
+            MessageActions.jumpToMessage({ channelId: session.channelId, messageId: session.lastMessageId, flash: true });
+        }
+    };
+
+    const handleDownload = async () => {
+        setIsMerging(true);
+        // For own uploads, we might not have them in ChunkManager if we reloaded?
+        // Actually onMessageCreate populates ChunkManager. So it should be there.
+        const chunks = ChunkManager.getChunks(session.id);
+        if (chunks && chunks.length === session.totalChunks) {
+            await handleFileMerge(chunks);
+        } else {
+            // Fallback: If we just uploaded, we might need to rely on local file? 
+            // But user wants to download *from Discord* to verify.
+            // If chunks are missing in ChunkManager (e.g. filtered), we can't download.
+            console.error("Missing chunks for download");
+        }
+        setIsMerging(false);
+    };
+
     return (
         <div className="vc-upload-row" style={{
             padding: "8px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "4px"
@@ -84,8 +107,30 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
             <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileSelect} />
             
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                <Text variant="text-md/bold">{session.name}</Text>
+                <Text 
+                    variant="text-md/bold" 
+                    style={{ 
+                        overflow: "hidden", 
+                        textOverflow: "ellipsis", 
+                        whiteSpace: "nowrap", 
+                        cursor: session.lastMessageId ? "pointer" : "default",
+                        textDecoration: session.lastMessageId ? "underline" : "none"
+                    }}
+                    onClick={handleJump}
+                >
+                    {session.name}
+                </Text>
                 <div style={{ display: "flex", gap: "8px" }}>
+                    {isDone && (
+                        <Button 
+                            size={Button.Sizes.TINY} 
+                            color={Button.Colors.BRAND} 
+                            onClick={handleDownload}
+                            disabled={isMerging}
+                        >
+                            {isMerging ? "Merging..." : "Download"}
+                        </Button>
+                    )}
                     {!isDone && (
                         <Button 
                             size={Button.Sizes.TINY} 
@@ -139,6 +184,16 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
     const isDone = dlState && dlState.status === 'completed';
     const progress = dlState ? Math.round((dlState.bytesDownloaded / dlState.totalBytes) * 100) : 0;
 
+    // Use chunks to find a message ID to jump to (any chunk works, last one is best)
+    // Actually session.chunks might be empty if we just detected it via header but haven't fetched?
+    // No, session.chunks has the chunks we found.
+    const lastChunk = session.chunks[session.chunks.length - 1];
+    // We don't store messageId in Chunk? We store url. 
+    // Wait, ChunkManager doesn't store message ID.
+    // I need to add messageId to StoredFileChunk or something if I want to jump.
+    // Or just jump to channel.
+    // I'll leave name unclickable for now if I don't have message ID, or just Channel Link.
+    
     return (
         <div style={{
             padding: "8px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "4px"
