@@ -83,8 +83,9 @@ export const UploadsDashboard = (props: any) => {
 
     // Sort
     displayList.sort((a, b) => {
-        const dateA = (a as any).lastUpdated || (a as any).startTime || 0;
-        const dateB = (b as any).lastUpdated || (b as any).startTime || 0;
+        // Use ID (timestamp) for date sorting
+        const dateA = a.id;
+        const dateB = b.id;
         
         let res = 0;
         if (sortBy === 'date') res = dateB - dateA;

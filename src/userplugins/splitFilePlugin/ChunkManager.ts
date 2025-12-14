@@ -45,10 +45,24 @@ interface ChunkStorage {
 
 export const calculateChecksum = async (file: File | Blob): Promise<string> => {
     try {
-        const arrayBuffer = await file.arrayBuffer();
-        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB slices for hashing
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const hashes: string[] = [];
+
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const slice = file.slice(start, end);
+            const buffer = await slice.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            hashes.push(hashArray.map(b => b.toString(16).padStart(2, '0')).join(''));
+        }
+        
+        // Final hash of the hashes
+        const combined = new TextEncoder().encode(hashes.join(''));
+        const finalBuffer = await crypto.subtle.digest('SHA-256', combined);
+        return Array.from(new Uint8Array(finalBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
     } catch (e) {
         console.error("[FileSplitter] Checksum calculation failed:", e);
         return "error";
