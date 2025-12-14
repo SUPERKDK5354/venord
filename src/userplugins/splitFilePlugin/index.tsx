@@ -316,7 +316,8 @@ export default definePlugin({
                                     const storedChunk: StoredFileChunk = {
                                         ...chunkData,
                                         url: attachment.url,
-                                        proxyUrl: attachment.proxy_url
+                                        proxyUrl: attachment.proxy_url,
+                                        messageId: message.id
                                     };
 
                                     ChunkManager.addChunk(storedChunk, message.channel_id, message.author);
@@ -378,44 +379,31 @@ export default definePlugin({
 
                             },
 
-                start() {
-
-                    UploadManager.init();
-
-        
-
-                    // Initiate periodic garbage collection for expired chunk data.
-
-            this.chunkCleanupInterval = setInterval(() => {
-
-                ChunkManager.cleanOldChunks();
-
-            }, 60000); // Run every 60 seconds.
-
-    
-
-            // 1. Subscribe to the 'MESSAGE_CREATE' event to intercept incoming messages.
-
-            Dispatcher.subscribe("MESSAGE_CREATE", this.onMessageCreate);
-
+        onMessageDelete({ id }: { id: string }) {
+            ChunkManager.removeChunk(id);
         },
 
-    
+        start() {
+            UploadManager.init();
+
+            // Initiate periodic garbage collection for expired chunk data.
+            this.chunkCleanupInterval = setInterval(() => {
+                ChunkManager.cleanOldChunks();
+            }, 60000); // Run every 60 seconds.
+
+            // 1. Subscribe to the 'MESSAGE_CREATE' event to intercept incoming messages.
+            Dispatcher.subscribe("MESSAGE_CREATE", this.onMessageCreate);
+            Dispatcher.subscribe("MESSAGE_DELETE", this.onMessageDelete);
+        },
 
         stop() {
-
             // Perform complete cleanup: remove all patches and event subscriptions.
-
             // Patcher.unpatchAll("FileSplitter");
-
             Dispatcher.unsubscribe("MESSAGE_CREATE", this.onMessageCreate);
+            Dispatcher.unsubscribe("MESSAGE_DELETE", this.onMessageDelete);
 
             if (this.chunkCleanupInterval) {
-
                 clearInterval(this.chunkCleanupInterval);
-
             }
-
         }
-
     });

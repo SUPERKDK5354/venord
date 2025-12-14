@@ -15,6 +15,7 @@ export interface FileChunkMetadata {
 export interface StoredFileChunk extends FileChunkMetadata {
     url: string;
     proxyUrl?: string;
+    messageId?: string;
 }
 
 // Info about the user who uploaded the file
@@ -93,6 +94,26 @@ export class ChunkManager {
             session.isComplete = session.chunks.length === session.totalChunks;
             this.emitChange();
         }
+    }
+
+    static removeChunk(messageId: string) {
+        let changed = false;
+        Object.keys(this.storage).forEach(key => {
+            const session = this.storage[key];
+            const initialLength = session.chunks.length;
+            session.chunks = session.chunks.filter(c => c.messageId !== messageId);
+            
+            if (session.chunks.length !== initialLength) {
+                changed = true;
+                session.isComplete = false; // Became incomplete
+                
+                // If no chunks left, remove session?
+                if (session.chunks.length === 0) {
+                    delete this.storage[key];
+                }
+            }
+        });
+        if (changed) this.emitChange();
     }
 
     static getSession(sessionId: number): DetectedFileSession | null {
