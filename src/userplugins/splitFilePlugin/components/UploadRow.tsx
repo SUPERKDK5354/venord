@@ -1,4 +1,4 @@
-import { Button, Text, MessageActions, useRef, useState } from "@webpack/common";
+import { Button, Text, MessageActions, useRef, useState, TooltipContainer } from "@webpack/common";
 import { UploadManager, UploadSession } from "../UploadManager";
 import { ChunkManager, handleFileMerge } from "../ChunkManager";
 
@@ -117,9 +117,11 @@ export const UploadRow = ({ session }: { session: UploadSession }) => {
                     <ChannelLink channelId={session.channelId} />
                 </div>
                 {!isDone && !isPaused && (
-                    <Text variant="text-xs/normal" color="text-muted">
-                        {formatSize(session.speed)}/s • {formatTime(session.etr)} left
-                    </Text>
+                    <TooltipContainer text={`Chunks: ${session.completedIndices.size}/${session.totalChunks}`}>
+                        <Text variant="text-xs/normal" color="text-muted" style={{ cursor: 'help' }}>
+                            {formatSize(session.speed)}/s • {formatTime(session.etr)} left
+                        </Text>
+                    </TooltipContainer>
                 )}
             </div>
         </div>

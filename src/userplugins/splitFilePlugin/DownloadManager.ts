@@ -1,6 +1,7 @@
 import { RestAPI, Constants, Toasts, showToast } from "@webpack/common";
 import { calculateChecksum, ChunkManager, DetectedFileSession, StoredFileChunk, isValidChunk } from "./ChunkManager";
 import { settings } from "./settings";
+import { showNotification } from "@api/Notifications";
 
 export interface DownloadState {
     sessionId: number;
@@ -255,7 +256,12 @@ export class DownloadManager {
 
             dl.status = 'completed';
             this.emitChange();
-            showToast("Download ready!", Toasts.Type.SUCCESS);
+            showNotification({
+                title: "Download Complete",
+                body: `${session.name} is ready to save.`,
+                icon: "DownloadIcon",
+                onClick: () => this.saveFileToDisk(session.id)
+            });
 
         } catch (e: any) {
             if (dl.controller.signal.aborted) return;
