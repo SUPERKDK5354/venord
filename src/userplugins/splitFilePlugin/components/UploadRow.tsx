@@ -59,7 +59,8 @@ export const UploadRow = ({ session }: { session: UploadSession }) => {
 
     const handleDownload = async () => {
         setIsMerging(true);
-        const chunks = ChunkManager.getChunks(session.id);
+        const sessionData = ChunkManager.getSession(session.id);
+        const chunks = sessionData?.chunks;
         if (chunks && chunks.length === session.totalChunks) {
             await handleFileMerge(chunks);
         } else {
