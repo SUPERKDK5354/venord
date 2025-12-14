@@ -428,7 +428,7 @@ export const UploadsDashboard = (props: any) => {
                     )}
 
                     {/* LIST */}
-                    <div className="upload-list" style={{ overflowY: 'auto', flex: 1, paddingRight: '8px' }}>
+                    <div className="upload-list" key={tab} style={{ overflowY: 'auto', flex: 1, paddingRight: '8px' }}>
                         {displayList.length === 0 ? (
                             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '40px', opacity: 0.5 }}>
                                 <Text variant="heading-lg/semibold">No files found</Text>
@@ -437,8 +437,8 @@ export const UploadsDashboard = (props: any) => {
                         ) : (
                             displayList.map((item: any) => (
                                 tab === 'YOUR_UPLOADS' 
-                                    ? <UploadRow key={item.id} session={item} />
-                                    : <DownloadRow key={item.id} session={item} />
+                                    ? <UploadRow key={`up-${item.id}`} session={item} />
+                                    : <DownloadRow key={`dl-${item.id}`} session={item} />
                             ))
                         )}
                     </div>
