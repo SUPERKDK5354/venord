@@ -1,8 +1,11 @@
 import { ModalCloseButton, ModalContent, ModalHeader, ModalRoot, ModalSize } from "@utils/modal";
-import { Button, Text, MessageActions, SelectedChannelStore, TabBar, TooltipContainer, useState, useEffect, useRef } from "@webpack/common";
+import { Button, Text, MessageActions, SelectedChannelStore, TabBar, TooltipContainer, TextInput, useState, useEffect, useRef } from "@webpack/common";
 import { UploadManager, UploadSession } from "./UploadManager";
 import { ChunkManager, DetectedFileSession, handleFileMerge } from "./ChunkManager";
 import { DownloadManager, DownloadState } from "./DownloadManager";
+import * as webpack from "@webpack";
+
+const UserStore = webpack.findByPropsLazy("getCurrentUser");
 
 // --- Helpers ---
 const formatSize = (bytes: number) => {
@@ -21,16 +24,9 @@ const formatTime = (seconds: number) => {
 };
 
 const UserLink = ({ user }: { user: { id: string, username: string, avatar?: string } }) => {
-    // Construct avatar URL. 
-    // Format: https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png
     const avatarUrl = user.avatar 
         ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=32`
-        : `https://cdn.discordapp.com/embed/avatars/${parseInt(user.id) % 5}.png`; // Fallback
-
-    const handleClick = () => {
-        // Open user profile? Not easy API exposed. 
-        // Just jumping to channel/message is better context.
-    };
+        : `https://cdn.discordapp.com/embed/avatars/${parseInt(user.id) % 5}.png`;
 
     return (
         <div style={{ display: "flex", alignItems: "center", gap: "6px", marginRight: "8px" }}>
@@ -86,15 +82,10 @@ const UploadRow = ({ session }: { session: UploadSession }) => {
 
     const handleDownload = async () => {
         setIsMerging(true);
-        // For own uploads, we might not have them in ChunkManager if we reloaded?
-        // Actually onMessageCreate populates ChunkManager. So it should be there.
         const chunks = ChunkManager.getChunks(session.id);
         if (chunks && chunks.length === session.totalChunks) {
             await handleFileMerge(chunks);
         } else {
-            // Fallback: If we just uploaded, we might need to rely on local file? 
-            // But user wants to download *from Discord* to verify.
-            // If chunks are missing in ChunkManager (e.g. filtered), we can't download.
             console.error("Missing chunks for download");
         }
         setIsMerging(false);
@@ -184,16 +175,6 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
     const isDone = dlState && dlState.status === 'completed';
     const progress = dlState ? Math.round((dlState.bytesDownloaded / dlState.totalBytes) * 100) : 0;
 
-    // Use chunks to find a message ID to jump to (any chunk works, last one is best)
-    // Actually session.chunks might be empty if we just detected it via header but haven't fetched?
-    // No, session.chunks has the chunks we found.
-    const lastChunk = session.chunks[session.chunks.length - 1];
-    // We don't store messageId in Chunk? We store url. 
-    // Wait, ChunkManager doesn't store message ID.
-    // I need to add messageId to StoredFileChunk or something if I want to jump.
-    // Or just jump to channel.
-    // I'll leave name unclickable for now if I don't have message ID, or just Channel Link.
-    
     return (
         <div style={{
             padding: "8px", marginBottom: "8px", backgroundColor: "var(--background-secondary)", borderRadius: "4px"
@@ -228,10 +209,15 @@ const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                             {dlState?.status === 'paused' ? "Resume" : "Download"}
                         </Button>
                     )}
+                    {/* Add Cancel Button for downloads */}
+                    {(isDownloading || dlState?.status === 'paused') && (
+                        <Button size={Button.Sizes.TINY} color={Button.Colors.RED} onClick={() => DownloadManager.cancelDownload(session.id)}>
+                            Cancel
+                        </Button>
+                    )}
                 </div>
             </div>
 
-            {/* Progress (Only if downloading/paused/done) */}
             {(dlState) && (
                 <div style={{ height: "8px", width: "100%", backgroundColor: "var(--background-tertiary)", borderRadius: "4px", overflow: "hidden" }}>
                     <div style={{ height: "100%", width: `${progress}%`, backgroundColor: isDone ? "var(--text-positive)" : "var(--brand-experiment)", transition: "width 0.2s" }} />
@@ -266,8 +252,14 @@ export const UploadsDashboard = (props: any) => {
     const [scanLimit, setScanLimit] = useState("100");
     const [isScanning, setIsScanning] = useState(false);
 
+    // Filters & Sort
+    const [searchQuery, setSearchQuery] = useState("");
+    const [sortBy, setSortBy] = useState<"date" | "name" | "size">("date");
+    const [filterChannelId, setFilterChannelId] = useState("");
+    const [filterUserId, setFilterUserId] = useState(""); // Filter by user ID
+
     useEffect(() => {
-        const updateUploads = () => setUploads(Array.from(UploadManager.sessions.values()).sort((a, b) => b.id - a.id));
+        const updateUploads = () => setUploads(Array.from(UploadManager.sessions.values()));
         const updateFiles = () => setDetectedFiles(ChunkManager.getSessions());
         
         updateUploads();
@@ -287,9 +279,43 @@ export const UploadsDashboard = (props: any) => {
 
     // Filter Logic
     const currentChannelId = SelectedChannelStore.getChannelId();
-    const filteredFiles = tab === 'CURRENT_CHANNEL' 
-        ? detectedFiles.filter(f => f.channelId === currentChannelId)
-        : detectedFiles;
+    
+    let displayList = [];
+    if (tab === 'YOUR_UPLOADS') {
+        displayList = uploads;
+    } else {
+        displayList = detectedFiles;
+        if (tab === 'CURRENT_CHANNEL') {
+            displayList = displayList.filter(f => f.channelId === currentChannelId);
+        }
+    }
+
+    // Apply Search
+    if (searchQuery) {
+        displayList = displayList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }
+
+    // Apply Filters (Only for Download tabs mainly, but works for uploads too if properties exist)
+    if (filterChannelId && tab !== 'CURRENT_CHANNEL') { // Channel filter redundant in Current Channel tab
+        displayList = displayList.filter(f => f.channelId === filterChannelId);
+    }
+    if (filterUserId) {
+        // DetectedFileSession has .uploader.id, UploadSession doesn't store uploader ID (it's current user)
+        if (tab !== 'YOUR_UPLOADS') {
+            displayList = displayList.filter(f => (f as DetectedFileSession).uploader?.id === filterUserId);
+        }
+    }
+
+    // Sort
+    displayList.sort((a, b) => {
+        const dateA = (a as any).lastUpdated || (a as any).startTime || 0;
+        const dateB = (b as any).lastUpdated || (b as any).startTime || 0;
+        
+        if (sortBy === 'date') return dateB - dateA; // Newest first
+        if (sortBy === 'name') return a.name.localeCompare(b.name);
+        if (sortBy === 'size') return b.size - a.size;
+        return 0;
+    });
 
     return (
         <ModalRoot {...props} size={ModalSize.LARGE}>
@@ -298,7 +324,7 @@ export const UploadsDashboard = (props: any) => {
                     <Text variant="heading-lg/bold">Upload Manager</Text>
                     
                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                        {tab === 'YOUR_UPLOADS' ? (
+                        {tab === 'YOUR_UPLOADS' && (
                             <>
                                 <input 
                                     type="file" 
@@ -313,24 +339,22 @@ export const UploadsDashboard = (props: any) => {
                                     New Upload
                                 </Button>
                             </>
-                        ) : tab === 'CURRENT_CHANNEL' ? (
-                            <>
-                                <input 
-                                    type="number" 
-                                    value={scanLimit} 
-                                    onChange={(e) => setScanLimit(e.target.value)}
-                                    style={{ 
-                                        width: "60px", padding: "4px", borderRadius: "4px", 
-                                        backgroundColor: "var(--background-tertiary)", color: "var(--text-normal)", border: "none" 
-                                    }}
-                                />
-                                <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
-                                    {isScanning ? "Scanning..." : "Scan"}
-                                </Button>
-                            </>
-                        ) : null}
+                        )}
                         <ModalCloseButton onClick={props.onClose} />
                     </div>
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", width: "100%" }}>
+                    <TextInput 
+                        placeholder="Search files..."
+                        value={searchQuery}
+                        onChange={setSearchQuery}
+                        style={{ flexGrow: 1 }}
+                    />
+                    {/* Sort Dropdown simulated with buttons for now */}
+                    <Button size={Button.Sizes.MIN} look={Button.Looks.OUTLINED} onClick={() => setSortBy(sortBy === 'date' ? 'name' : sortBy === 'name' ? 'size' : 'date')}>
+                        Sort: {sortBy.toUpperCase()}
+                    </Button>
                 </div>
 
                 <TabBar selectedItem={tab} onItemSelect={setTab} type="top">
@@ -338,23 +362,53 @@ export const UploadsDashboard = (props: any) => {
                     <TabBar.Item id="ALL_UPLOADS">All Uploads</TabBar.Item>
                     <TabBar.Item id="CURRENT_CHANNEL">Current Channel</TabBar.Item>
                 </TabBar>
+
+                {/* Sub-toolbar for specific tabs */}
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", width: "100%" }}>
+                    {tab === 'CURRENT_CHANNEL' && (
+                        <>
+                            <TextInput 
+                                placeholder="Limit"
+                                value={scanLimit} 
+                                onChange={setScanLimit}
+                                style={{ width: "60px" }}
+                            />
+                            <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
+                                {isScanning ? "Scanning..." : "Scan Channel"}
+                            </Button>
+                        </>
+                    )}
+                    {tab !== 'YOUR_UPLOADS' && (
+                        <TextInput 
+                            placeholder="Filter User ID" 
+                            value={filterUserId} 
+                            onChange={setFilterUserId}
+                            style={{ width: "120px" }}
+                        />
+                    )}
+                    {tab === 'ALL_UPLOADS' && (
+                        <TextInput 
+                            placeholder="Filter Channel ID" 
+                            value={filterChannelId} 
+                            onChange={setFilterChannelId}
+                            style={{ width: "120px" }}
+                        />
+                    )}
+                </div>
+
             </ModalHeader>
 
             <ModalContent>
                 <div style={{ padding: "16px 0" }}>
-                    {tab === 'YOUR_UPLOADS' ? (
-                        uploads.length === 0 ? (
-                            <Text variant="text-md/normal" color="text-muted" style={{ textAlign: "center" }}>
-                                No active uploads.
-                            </Text>
-                        ) : uploads.map(s => <UploadRow key={s.id} session={s} />)
+                    {displayList.length === 0 ? (
+                        <Text variant="text-md/normal" color="text-muted" style={{ textAlign: "center" }}>
+                            No files found.
+                        </Text>
                     ) : (
-                        filteredFiles.length === 0 ? (
-                            <Text variant="text-md/normal" color="text-muted" style={{ textAlign: "center" }}>
-                                No files found. {tab === 'CURRENT_CHANNEL' && "Try scanning!"}
-                            </Text>
-                        ) : filteredFiles.sort((a, b) => b.lastUpdated - a.lastUpdated).map(f => (
-                            <DownloadRow key={f.id} session={f} />
+                        displayList.map((item: any) => (
+                            tab === 'YOUR_UPLOADS' 
+                                ? <UploadRow key={item.id} session={item} />
+                                : <DownloadRow key={item.id} session={item} />
                         ))
                     )}
                 </div>
