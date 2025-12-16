@@ -51,13 +51,17 @@ import { showNotification } from "@api/Notifications";
 
 export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
     const [status, setStatus] = useState("Ready");
-    const [isRepairing, setIsRepairing] = useState(false);
     const [dlState, setDlState] = useState<DownloadState | undefined>(DownloadManager.downloads.get(session.id));
+    const [repairState, setRepairState] = useState(DownloadManager.activeRepairs.get(session.id));
 
     useEffect(() => {
         return DownloadManager.addListener(() => {
             const dl = DownloadManager.downloads.get(session.id);
             if (dl) setDlState({ ...dl });
+            
+            const rep = DownloadManager.activeRepairs.get(session.id);
+            if (rep) setRepairState({ ...rep });
+            else setRepairState(undefined);
         });
     }, [session.id]);
 
@@ -79,80 +83,12 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
             showToast("File size mismatch! Select the exact original file.", Toasts.Type.FAILURE);
             return;
         }
-
-        setIsRepairing(true);
-        setStatus("Verifying...");
         
-        try {
-            const badIndices = await ChunkManager.verifySessionAgainstFile(session.id, file);
-            if (badIndices.length === 0) {
-                showToast(`Verification Passed: ${session.name}`, Toasts.Type.SUCCESS);
-                showNotification({ title: "Verification Passed", body: `${session.name}: All chunks OK`, icon: "CheckmarkLargeIcon" });
-                setStatus("Verified");
-            } else {
-                console.error("Bad chunks:", badIndices);
-                showToast(`Corruption Detected: ${session.name} (${badIndices.length} chunks)`, Toasts.Type.FAILURE);
-                showNotification({ title: "Corruption Detected", body: `${session.name}: Found ${badIndices.length} bad chunks. Repairing...`, icon: "WarningIcon" });
-                setStatus(`Repairing ${badIndices.length} chunks...`);
-
-                const abortController = new AbortController();
-                
-                for (const idx of badIndices) {
-                    ChunkManager.removeChunkByIndex(session.id, idx);
-                }
-
-                const validChunk = session.chunks.find(c => !badIndices.includes(c.index));
-                let detectedChunkSize = 0;
-                if (validChunk) {
-                     const candidates = [8, 9.5, 9.9, 10, 24, 24.9, 25, 49, 50, 99, 100, 499, 500].map(m => m * 1024 * 1024);
-                     for (const s of candidates) {
-                         const expectedTotal = Math.ceil(file.size / s);
-                         if (expectedTotal === session.totalChunks) {
-                             detectedChunkSize = s;
-                             break;
-                         }
-                     }
-                }
-                if (detectedChunkSize === 0) detectedChunkSize = 9.5 * 1024 * 1024; 
-
-                for (const i of badIndices) {
-                    const start = i * detectedChunkSize;
-                    const end = Math.min(start + detectedChunkSize, file.size);
-                    const chunkBlob = file.slice(start, end);
-                    const chunkFile = new File([chunkBlob], `${session.name.replace(/[^a-zA-Z0-9.-]/g, "_")}.part${String(i + 1).padStart(3, '0')}`);
-                    
-                    const originalChecksum = session.chunks[0]?.checksum;
-                    const metadata = {
-                        type: "FileSplitterChunk",
-                        index: i,
-                        total: session.totalChunks,
-                        originalName: session.name,
-                        originalSize: session.size,
-                        timestamp: session.id,
-                        checksum: originalChecksum
-                    };
-
-                    await UploadManager.uploadChunk(chunkFile, metadata, session.channelId, abortController.signal);
-                    await new Promise(r => setTimeout(r, 1000));
-                }
-                
-                showToast(`Repair Complete: ${session.name}`, Toasts.Type.SUCCESS);
-                showNotification({ title: "Repair Complete", body: `${session.name}: Repaired ${badIndices.length} chunks.`, icon: "CheckmarkLargeIcon" });
-                setStatus("Repaired");
-            }
-        } catch (err: any) {
-            console.error(err);
-            showToast(`Repair Failed: ${err.message}`, Toasts.Type.FAILURE);
-            showNotification({ title: "Repair Failed", body: `${session.name}: ${err.message}`, icon: "CloseSmallIcon" });
-            setStatus("Error");
-        } finally {
-            setIsRepairing(false);
-            e.target.value = "";
-        }
+        e.target.value = "";
+        DownloadManager.repairSession(session.id, file);
     };
 
     const handleQuickVerify = async () => {
-        setIsRepairing(true);
         setStatus("Checking...");
         try {
             // 1. Check if we have blobs downloaded
@@ -161,7 +97,6 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
             if (!state?.blobs || state.blobs.size === 0) {
                 showToast("No downloaded data to verify. Download first.", Toasts.Type.INFO);
                 setStatus("No Data");
-                setIsRepairing(false);
                 return;
             }
 
@@ -212,7 +147,6 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                 
                 if (orderedBlobs.length !== session.totalChunks) {
                     showToast("Verification Failed: Missing chunks", Toasts.Type.FAILURE);
-                    setIsRepairing(false);
                     return;
                 }
 
@@ -239,17 +173,18 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
             showNotification({ title: "Verification Error", body: e.message, icon: "CloseSmallIcon" });
             setStatus("Error");
         }
-        setIsRepairing(false);
     };
 
     const isDownloading = dlState?.status === 'downloading';
-    // Calculate progress: if downloading, use bytes; else use chunk count
+    // Calculate progress
     const progress = isDownloading && dlState
         ? Math.min(100, (dlState.bytesDownloaded / dlState.totalBytes) * 100)
         : Math.min(100, (session.chunks.length / session.totalChunks) * 100);
     
     const isComplete = session.chunks.length === session.totalChunks;
     const isDlComplete = dlState?.status === 'completed';
+    
+    const repairStatus = repairState ? (repairState.status === 'verifying' ? "Verifying..." : repairState.status === 'repairing' ? `Repairing ${repairState.repairedChunks}/${repairState.totalBadChunks}` : "Complete") : null;
 
     return (
         <div style={{ 
@@ -310,7 +245,7 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                     size={Button.Sizes.MIN} 
                     look={Button.Looks.LINK}
                     color={Button.Colors.PRIMARY}
-                    disabled={isRepairing || !dlState || (dlState.status !== 'completed' && dlState.status !== 'merging') || !(dlState as any).blobs?.size}
+                    disabled={!!repairState || !dlState || (dlState.status !== 'completed' && dlState.status !== 'merging') || !(dlState as any).blobs?.size}
                     onClick={handleQuickVerify}
                     title={!dlState ? "Download first to verify" : "Verify integrity of downloaded data"}
                 >
@@ -327,10 +262,10 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                     size={Button.Sizes.MIN} 
                     look={Button.Looks.LINK}
                     color={Button.Colors.RED}
-                    disabled={isRepairing}
+                    disabled={!!repairState}
                     onClick={() => document.getElementById(`repair-${session.id}`)?.click()}
                 >
-                    {isRepairing ? "Checking..." : "Repair (File)"}
+                    {repairStatus || "Repair (File)"}
                 </Button>
             </div>
         </div>

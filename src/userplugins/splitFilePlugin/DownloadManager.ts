@@ -2,6 +2,7 @@ import { RestAPI, Constants, Toasts, showToast } from "@webpack/common";
 import { calculateChecksum, ChunkManager, DetectedFileSession, StoredFileChunk, isValidChunk } from "./ChunkManager";
 import { settings } from "./settings";
 import { showNotification } from "@api/Notifications";
+import { UploadManager } from "./UploadManager";
 
 export interface DownloadState {
     sessionId: number;
@@ -27,10 +28,20 @@ export interface DownloadState {
     isPaused: boolean;
 }
 
+export interface RepairState {
+    sessionId: number;
+    name: string;
+    status: 'verifying' | 'repairing' | 'completed' | 'failed';
+    totalBadChunks: number;
+    repairedChunks: number;
+    error?: string;
+}
+
 type Listener = () => void;
 
 export class DownloadManager {
     static downloads = new Map<number, DownloadState>();
+    static activeRepairs = new Map<number, RepairState>();
     private static listeners = new Set<Listener>();
 
     static addListener(listener: Listener) {
@@ -40,6 +51,110 @@ export class DownloadManager {
 
     static emitChange() {
         this.listeners.forEach(l => l());
+    }
+
+    static async repairSession(sessionId: number, file: File) {
+        const session = ChunkManager.getSession(sessionId);
+        if (!session) return;
+
+        const repairState: RepairState = {
+            sessionId,
+            name: session.name,
+            status: 'verifying',
+            totalBadChunks: 0,
+            repairedChunks: 0
+        };
+        this.activeRepairs.set(sessionId, repairState);
+        this.emitChange();
+
+        try {
+            // 1. Verify
+            const badIndices = await ChunkManager.verifySessionAgainstFile(sessionId, file);
+            
+            if (badIndices.length === 0) {
+                showToast(`Verification Passed: ${session.name}`, Toasts.Type.SUCCESS);
+                showNotification({ title: "Verification Passed", body: `${session.name}: All chunks OK`, icon: "CheckmarkLargeIcon" });
+                this.activeRepairs.delete(sessionId);
+                this.emitChange();
+                return;
+            }
+
+            // 2. Repair
+            repairState.status = 'repairing';
+            repairState.totalBadChunks = badIndices.length;
+            this.emitChange();
+
+            showToast(`Corruption Detected: ${session.name} (${badIndices.length} chunks)`, Toasts.Type.FAILURE);
+            showNotification({ title: "Corruption Detected", body: `${session.name}: Found ${badIndices.length} bad chunks. Repairing...`, icon: "WarningIcon" });
+
+            const abortController = new AbortController();
+            
+            // Remove bad chunks from local state
+            for (const idx of badIndices) {
+                ChunkManager.removeChunkByIndex(session.id, idx);
+            }
+
+            // Deduce chunk size
+            let detectedChunkSize = 0;
+            const validChunk = session.chunks.find(c => !badIndices.includes(c.index));
+            if (validChunk) {
+                    const candidates = [8, 9.5, 9.9, 10, 24, 24.9, 25, 49, 50, 99, 100, 499, 500].map(m => m * 1024 * 1024);
+                    for (const s of candidates) {
+                        const expectedTotal = Math.ceil(file.size / s);
+                        if (expectedTotal === session.totalChunks) {
+                            detectedChunkSize = s;
+                            break;
+                        }
+                    }
+            }
+            if (detectedChunkSize === 0) detectedChunkSize = 9.5 * 1024 * 1024; 
+
+            for (const i of badIndices) {
+                const start = i * detectedChunkSize;
+                const end = Math.min(start + detectedChunkSize, file.size);
+                const chunkBlob = file.slice(start, end);
+                const chunkFile = new File([chunkBlob], `${session.name.replace(/[^a-zA-Z0-9.-]/g, "_")}.part${String(i + 1).padStart(3, '0')}`);
+                
+                const originalChecksum = session.chunks[0]?.checksum;
+                const metadata = {
+                    type: "FileSplitterChunk",
+                    index: i,
+                    total: session.totalChunks,
+                    originalName: session.name,
+                    originalSize: session.size,
+                    timestamp: session.id,
+                    checksum: originalChecksum
+                };
+
+                await UploadManager.uploadChunk(chunkFile, metadata, session.channelId, abortController.signal);
+                repairState.repairedChunks++;
+                this.emitChange();
+                
+                await new Promise(r => setTimeout(r, 1000));
+            }
+
+            repairState.status = 'completed';
+            this.emitChange();
+            
+            showToast(`Repair Complete: ${session.name}`, Toasts.Type.SUCCESS);
+            showNotification({ title: "Repair Complete", body: `${session.name}: Repaired ${badIndices.length} chunks.`, icon: "CheckmarkLargeIcon" });
+            
+            // Auto-clear success state after a delay
+            setTimeout(() => {
+                if (this.activeRepairs.get(sessionId) === repairState) {
+                    this.activeRepairs.delete(sessionId);
+                    this.emitChange();
+                }
+            }, 5000);
+
+        } catch (e: any) {
+            console.error(e);
+            repairState.status = 'failed';
+            repairState.error = e.message;
+            this.emitChange();
+            showToast(`Repair Failed: ${e.message}`, Toasts.Type.FAILURE);
+            showNotification({ title: "Repair Failed", body: `${session.name}: ${e.message}`, icon: "CloseSmallIcon" });
+        }
     }
 
     static startDownload(sessionId: number) {
