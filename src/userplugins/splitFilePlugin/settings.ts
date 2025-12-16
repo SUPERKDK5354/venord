@@ -38,6 +38,22 @@ export const settings = definePluginSettings({
         default: 3,
         description: "Number of parallel download streams (Max 5 recommended)",
     },
+    // Advanced / Dynamic
+    enableDynamicMode: {
+        type: OptionType.BOOLEAN,
+        default: false,
+        description: "Dynamically adjust workers based on performance (Experimental)",
+    },
+    safeMode: {
+        type: OptionType.BOOLEAN,
+        default: true,
+        description: "Anti-Logout: Automatically pause on rate limits to prevent bans",
+    },
+    safeModeCooldown: {
+        type: OptionType.NUMBER,
+        default: 60,
+        description: "Seconds to wait before resuming after a rate limit hit",
+    },
     baseDelay: {
         type: OptionType.NUMBER,
         default: 1500,

@@ -35,6 +35,8 @@ export interface RepairState {
     totalBadChunks: number;
     repairedChunks: number;
     error?: string;
+    speed: number;
+    startTime: number;
 }
 
 type Listener = () => void;
@@ -62,7 +64,9 @@ export class DownloadManager {
             name: session.name,
             status: 'verifying',
             totalBadChunks: 0,
-            repairedChunks: 0
+            repairedChunks: 0,
+            speed: 0,
+            startTime: Date.now()
         };
         this.activeRepairs.set(sessionId, repairState);
         this.emitChange();
@@ -82,6 +86,7 @@ export class DownloadManager {
             // 2. Repair
             repairState.status = 'repairing';
             repairState.totalBadChunks = badIndices.length;
+            repairState.startTime = Date.now();
             this.emitChange();
 
             showToast(`Corruption Detected: ${session.name} (${badIndices.length} chunks)`, Toasts.Type.FAILURE);
@@ -109,43 +114,31 @@ export class DownloadManager {
             }
             if (detectedChunkSize === 0) detectedChunkSize = 9.5 * 1024 * 1024; 
 
-            for (const i of badIndices) {
-                const start = i * detectedChunkSize;
-                const end = Math.min(start + detectedChunkSize, file.size);
-                const chunkBlob = file.slice(start, end);
-                const chunkFile = new File([chunkBlob], `${session.name.replace(/[^a-zA-Z0-9.-]/g, "_")}.part${String(i + 1).padStart(3, '0')}`);
-                
-                const originalChecksum = session.chunks[0]?.checksum;
-                const metadata = {
-                    type: "FileSplitterChunk",
-                    index: i,
-                    total: session.totalChunks,
-                    originalName: session.name,
-                    originalSize: session.size,
-                    timestamp: session.id,
-                    checksum: originalChecksum
-                };
-
-                await UploadManager.uploadChunk(chunkFile, metadata, session.channelId, abortController.signal);
-                repairState.repairedChunks++;
-                this.emitChange();
-                
-                await new Promise(r => setTimeout(r, 1000));
+            // Switch to UploadManager for resumption
+            const existingIndices = [];
+            for (let i = 0; i < session.totalChunks; i++) {
+                if (!badIndices.includes(i)) existingIndices.push(i);
             }
 
-            repairState.status = 'completed';
+            console.log(`[Repair] Handing over to UploadManager. Bad: ${badIndices.length}, Existing: ${existingIndices.length}`);
+            
+            await UploadManager.resurrectSessionWithParams(
+                file,
+                existingIndices,
+                session.totalChunks,
+                detectedChunkSize,
+                session.channelId,
+                session.id
+            );
+
+            // Clean up repair state since it's now an upload
+            this.activeRepairs.delete(sessionId);
             this.emitChange();
             
-            showToast(`Repair Complete: ${session.name}`, Toasts.Type.SUCCESS);
-            showNotification({ title: "Repair Complete", body: `${session.name}: Repaired ${badIndices.length} chunks.`, icon: "CheckmarkLargeIcon" });
-            
-            // Auto-clear success state after a delay
-            setTimeout(() => {
-                if (this.activeRepairs.get(sessionId) === repairState) {
-                    this.activeRepairs.delete(sessionId);
-                    this.emitChange();
-                }
-            }, 5000);
+            showToast(`Resumed Upload: ${session.name}`, Toasts.Type.SUCCESS);
+            showNotification({ title: "Upload Resumed", body: `${session.name}: Continuing from ${existingIndices.length}/${session.totalChunks} chunks.`, icon: "CheckmarkLargeIcon" });
+
+            return; 
 
         } catch (e: any) {
             console.error(e);
@@ -272,11 +265,20 @@ export class DownloadManager {
             .sort((a, b) => a.index - b.index)
             .filter(c => !state.blobs.has(c.index)); // Only queue missing chunks
 
-        const parallel = settings.store.parallelDownloading ?? true;
-        const concurrency = parallel ? (settings.store.downloadWorkers || 3) : 1;
+        // Auto-Scaler State
+        let currentConcurrency = 1;
+        let lastAdjustmentTime = 0;
+        let lastSpeed = 0;
+        let trend = 0;
+        let consecutiveErrors = 0;
 
         let activeCount = 0;
         let index = 0;
+
+        // Speed tracking state
+        let lastTick = Date.now();
+        let lastBytes = dl.bytesDownloaded;
+        let speedHistory: number[] = [];
 
         const processChunk = async (chunk: StoredFileChunk) => {
             if (dl.isPaused || dl.controller.signal.aborted) return;
@@ -284,7 +286,6 @@ export class DownloadManager {
             const fetcher = (window as any).VencordNative?.net?.fetch;
             if (!fetcher) throw new Error("VencordNative fetch missing");
 
-            // console.log(`[DownloadManager] Fetching chunk ${chunk.index}...`);
             const arrayBuffer = await fetcher(chunk.url);
             if (!arrayBuffer) throw new Error(`Fetch failed for chunk ${chunk.index}`);
             
@@ -292,13 +293,24 @@ export class DownloadManager {
             state.blobs.set(chunk.index, blob);
             dl.chunksDownloaded.add(chunk.index);
             
-            // Update Stats
+            // Update Stats (Instantaneous)
             dl.bytesDownloaded += blob.size;
+            
             const now = Date.now();
-            const elapsed = (now - dl.startTime) / 1000;
-            if (elapsed > 0) {
-                dl.speed = dl.bytesDownloaded / elapsed;
-                dl.etr = (dl.totalBytes - dl.bytesDownloaded) / dl.speed;
+            const deltaBytes = dl.bytesDownloaded - lastBytes;
+            const deltaTime = now - lastTick;
+            
+            if (deltaTime > 1000) {
+                const currentSpeed = deltaBytes / (deltaTime / 1000);
+                speedHistory.push(currentSpeed);
+                if (speedHistory.length > 5) speedHistory.shift();
+                
+                const avgSpeed = speedHistory.reduce((a, b) => a + b, 0) / speedHistory.length;
+                dl.speed = avgSpeed;
+                dl.etr = dl.speed > 0 ? (dl.totalBytes - dl.bytesDownloaded) / dl.speed : 0;
+                
+                lastTick = now;
+                lastBytes = dl.bytesDownloaded;
             }
             this.emitChange();
         };
@@ -307,6 +319,43 @@ export class DownloadManager {
 
         try {
             while (index < pendingChunks.length || activeCount > 0) {
+                // Dynamic Settings
+                const parallel = settings.store.parallelDownloading ?? true;
+                const maxConcurrency = settings.store.downloadWorkers || 3;
+                const dynamic = settings.store.enableDynamicMode;
+
+                if (!parallel) currentConcurrency = 1;
+                else if (!dynamic) currentConcurrency = maxConcurrency;
+                else {
+                    // Auto-Scaler
+                    const now = Date.now();
+                    if (now - lastAdjustmentTime > 2000 && dl.speed > 0) {
+                        if (activeCount >= currentConcurrency) {
+                            if (consecutiveErrors > 0) {
+                                currentConcurrency = Math.max(1, currentConcurrency - 1);
+                                trend = -1;
+                            } else if (dl.speed > lastSpeed * 1.1) {
+                                if (currentConcurrency < maxConcurrency) {
+                                    currentConcurrency++;
+                                    trend = 1;
+                                    console.log(`[DL AutoScaler] Speed up. Workers: ${currentConcurrency}`);
+                                }
+                            } else if (dl.speed < lastSpeed * 0.8 && trend === 1) {
+                                currentConcurrency = Math.max(1, currentConcurrency - 1);
+                                trend = -1;
+                                console.log(`[DL AutoScaler] Speed drop. Backing off to ${currentConcurrency}`);
+                            } else if (currentConcurrency < maxConcurrency && trend === 0) {
+                                currentConcurrency++;
+                                trend = 1;
+                            } else {
+                                trend = 0;
+                            }
+                        }
+                        lastSpeed = dl.speed;
+                        lastAdjustmentTime = now;
+                    }
+                }
+
                 if (dl.isPaused || dl.controller.signal.aborted) {
                     dl.status = 'paused';
                     this.emitChange();
@@ -314,21 +363,23 @@ export class DownloadManager {
                 }
 
                 // Start new tasks
-                while (activeCount < concurrency && index < pendingChunks.length && !dl.isPaused) {
+                while (activeCount < currentConcurrency && index < pendingChunks.length && !dl.isPaused) {
                     const chunk = pendingChunks[index++];
                     activeCount++;
                     
                     processChunk(chunk).then(() => {
                         activeCount--;
+                        consecutiveErrors = 0;
                     }).catch(e => {
                         activeCount--;
+                        consecutiveErrors++;
                         if (!dl.controller.signal.aborted) {
                             console.error(`Chunk ${chunk.index} failed`, e);
+                            // Simple retry or fail? Download manager usually fails on error currently.
+                            // But for dynamic mode, maybe we just want to back off?
+                            // For now, let's allow a few errors before failing completely?
+                            // Or just fail to be safe.
                             dl.error = `Chunk ${chunk.index} failed`;
-                            // Ideally retries? For now fail or continue? 
-                            // Let's just continue, it will remain in pending for next retry?
-                            // No, we filtered pending at start.
-                            // Simple retry logic:
                             dl.controller.abort(); 
                         }
                     });

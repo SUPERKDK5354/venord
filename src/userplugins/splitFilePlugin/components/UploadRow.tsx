@@ -117,7 +117,7 @@ export const UploadRow = ({ session }: { session: UploadSession }) => {
                     <ChannelLink channelId={session.channelId} />
                 </div>
                 {!isDone && !isPaused && (
-                    <TooltipContainer text={`Chunks: ${session.completedIndices.size}/${session.totalChunks}`}>
+                    <TooltipContainer text={`Chunks: ${session.completedIndices.size}/${session.totalChunks} (${(session.speed / session.chunkSize).toFixed(1)} chunks/s)`}>
                         <Text variant="text-xs/normal" color="text-muted" style={{ cursor: 'help' }}>
                             {formatSize(session.speed)}/s • {formatTime(session.etr)} left
                         </Text>

@@ -135,6 +135,7 @@ const DownloadButton = ({ message }: { message: any }) => {
 import { openModal } from "@utils/modal";
 import { UploadManager } from "./UploadManager";
 import { UploadsDashboard } from "./UploadsDashboard";
+import { DownloadManager } from "./DownloadManager";
 
 const SplitFileComponent = () => {
     const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -208,6 +209,26 @@ export default definePlugin({
 
     // This property is used to store the interval ID for cleanup.
     chunkCleanupInterval: null as NodeJS.Timeout | null,
+
+    commands: [
+        {
+            name: "scanfiles",
+            description: "Scan the current channel for split file chunks to populate the download manager.",
+            options: [
+                {
+                    name: "limit",
+                    description: "Number of messages to scan (default 100)",
+                    type: 4, // Integer
+                    required: false
+                }
+            ],
+            execute(args, ctx) {
+                const limit = args[0]?.value || 100;
+                const channelId = ctx.channel.id;
+                DownloadManager.scanChannel(channelId, Number(limit));
+            }
+        }
+    ],
 
         chatBarButton: {
 

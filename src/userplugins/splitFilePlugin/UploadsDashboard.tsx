@@ -176,14 +176,40 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
                                     />
                                 </div>
 
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div>
+                                        <Text variant="text-md/semibold">Dynamic Mode (Auto-Scaler)</Text>
+                                        <Text variant="text-xs/normal" color="text-muted">Automatically adjust workers based on network speed.</Text>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={settings.store.enableDynamicMode} 
+                                        onChange={() => settings.store.enableDynamicMode = !settings.store.enableDynamicMode} 
+                                        style={{ transform: 'scale(1.5)' }}
+                                    />
+                                </div>
+
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                    <div>
+                                        <Text variant="text-md/semibold">Safe Mode (Anti-Logout)</Text>
+                                        <Text variant="text-xs/normal" color="text-muted">Pause for 60s if rate limits are hit to prevent bans.</Text>
+                                    </div>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={settings.store.safeMode} 
+                                        onChange={() => settings.store.safeMode = !settings.store.safeMode} 
+                                        style={{ transform: 'scale(1.5)' }}
+                                    />
+                                </div>
+
                                 {settings.store.parallelUploads && (
                                     <div style={{ marginBottom: '16px' }}>
                                         <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
-                                            Worker Count ({settings.store.parallelCount || 2})
+                                            {settings.store.enableDynamicMode ? "Max Upload Workers" : "Upload Workers"} ({settings.store.parallelCount || 2})
                                         </Text>
                                         <input 
                                             type="range" 
-                                            min="2" max="5" 
+                                            min="2" max="10" 
                                             value={settings.store.parallelCount || 2} 
                                             onChange={(e) => settings.store.parallelCount = parseInt(e.target.value)}
                                             style={{ width: '100%' }}
@@ -240,7 +266,7 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
                                 {settings.store.parallelDownloading !== false && (
                                     <div style={{ marginBottom: '16px' }}>
                                         <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>
-                                            Download Workers ({settings.store.downloadWorkers || 3})
+                                            {settings.store.enableDynamicMode ? "Max Download Workers" : "Download Workers"} ({settings.store.downloadWorkers || 3})
                                         </Text>
                                         <input 
                                             type="range" 

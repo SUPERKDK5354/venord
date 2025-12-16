@@ -112,6 +112,68 @@ export class UploadManager {
         this.processUpload(session);
     }
 
+    static async resurrectSession(file: File, existingChunks: number[], totalChunks: number, channelId: string, originalId: number) {
+        // Check if session already exists
+        if (this.sessions.has(originalId)) {
+            // If it exists, just resume it
+            this.resumeUpload(originalId, file);
+            return;
+        }
+
+        // Infer chunk size from file size and total chunks
+        // If totalChunks > 1, assume standard splitting.
+        // We can try to match the setting or calculate.
+        // `Math.ceil(size / chunkSize) === totalChunks`
+        // It's safer to use the default setting or try to calculate, but we need exact chunk size.
+        // However, `processUpload` recalculates bounds based on `chunkSize`.
+        // If we get it wrong, we upload bad chunks.
+        // Ideally we pass `chunkSize` from DownloadManager (which deduced it).
+        // I will add `chunkSize` param.
+        
+        // Actually, let's recalculate it or default to settings?
+        // Risky if settings changed.
+        // Let's assume 9.5MB if not provided? 
+        // No, `resurrectSession` will be called from `DownloadManager` which calculated it.
+        // I will add `chunkSize` to arguments.
+    }
+
+    static async resurrectSessionWithParams(file: File, existingChunks: number[], totalChunks: number, chunkSize: number, channelId: string, originalId: number) {
+        const id = originalId || Date.now();
+        
+        const session: UploadSession = {
+            id,
+            file,
+            name: file.name,
+            size: file.size,
+            status: 'pending',
+            chunkSize,
+            channelId,
+            totalChunks,
+            completedIndices: new Set(existingChunks),
+            startTime: 0,
+            bytesUploaded: 0,
+            speed: 0,
+            etr: 0,
+            controller: new AbortController(),
+            isPaused: false
+        };
+
+        // Recalculate bytes already uploaded for progress bar
+        let uploaded = 0;
+        session.completedIndices.forEach(idx => {
+            const isLast = idx === session.totalChunks - 1;
+            const size = isLast ? (session.size % session.chunkSize || session.chunkSize) : session.chunkSize;
+            uploaded += size;
+        });
+        session.bytesUploaded = uploaded;
+
+        this.sessions.set(id, session);
+        this.emitChange();
+        
+        console.log(`[UploadManager] Resurrected session ${id} with ${existingChunks.length}/${totalChunks} chunks.`);
+        this.processUpload(session);
+    }
+
     static async resumeUpload(id: number, file?: File) {
         const session = this.sessions.get(id);
         if (!session) return;
@@ -208,10 +270,10 @@ export class UploadManager {
             // Queue system
             let activeCount = 0;
             let index = 0;
+            let consecutiveErrors = 0;
 
-            // Using a simple promise-based worker pool equivalent
-            // We loop until all pending indices are processed
-            
+            const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
             const processChunk = async (i: number) => {
                 const start = i * session.chunkSize;
                 const end = Math.min(start + session.chunkSize, session.size);
@@ -220,7 +282,6 @@ export class UploadManager {
 
                 let chunkChecksum: string | undefined;
                 try {
-                    // Quick SHA-256 for the chunk
                     const buffer = await chunkBlob.arrayBuffer();
                     const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
                     chunkChecksum = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -235,8 +296,8 @@ export class UploadManager {
                     originalName: session.name,
                     originalSize: session.size,
                     timestamp: session.id,
-                    checksum: fileChecksum, // Global checksum
-                    chunkChecksum: chunkChecksum // Per-chunk checksum
+                    checksum: fileChecksum,
+                    chunkChecksum: chunkChecksum
                 };
 
                 const msg = await this.uploadChunk(chunkFile, metadata, session.channelId, session.controller.signal);
@@ -247,50 +308,61 @@ export class UploadManager {
                 this.emitChange();
             };
 
-            const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-
             while (index < pendingIndices.length || activeCount > 0) {
+                // Dynamic Settings Read
+                const parallel = settings.store.parallelUploads;
+                const concurrency = parallel ? (settings.store.parallelCount || 2) : 1;
+
                 if (session.isPaused || session.controller.signal.aborted) {
                     session.status = 'paused';
                     this.emitChange();
                     return;
                 }
 
-                // Start new tasks if we have slots
                 while (activeCount < concurrency && index < pendingIndices.length && !session.isPaused) {
-                    const idx = pendingIndices[index++];
+                    const idx = pendingIndices[index]; // Read first
                     activeCount++;
+                    index++;
                     
-                    // Don't await here, let it run in bg
                     processChunk(idx).then(() => {
                         activeCount--;
                     }).catch(e => {
                         activeCount--;
-                        // If it aborted, we'll catch it in next loop or outer catch
+                        console.error(`Chunk ${idx} failed`, e);
+                        
+                        // Safe Mode / Anti-Logout Logic
+                        const isRateLimit = e?.message?.includes("429") || e?.status === 429;
+                        if (settings.store.safeMode && isRateLimit) {
+                            console.warn("[UploadManager] Rate limit hit! Entering Safe Mode cooldown.");
+                            session.isPaused = true;
+                            session.status = 'paused';
+                            showToast(`Rate limit hit. Pausing for ${settings.store.safeModeCooldown || 60}s`, Toasts.Type.WARNING);
+                            this.emitChange();
+                            
+                            setTimeout(() => {
+                                if (session.status === 'paused') {
+                                    console.log("Resuming from Safe Mode...");
+                                }
+                            }, (settings.store.safeModeCooldown || 60) * 1000);
+                            return;
+                        }
+
                         if (!session.controller.signal.aborted) {
-                            console.error(`Chunk ${idx} failed`, e);
-                            // Simple retry logic could go here, or just fail session
                             session.controller.abort();
-                            throw e; 
+                            session.error = e.message;
+                            session.status = 'error';
+                            this.emitChange();
                         }
                     });
 
-                    // Add delay between STARTING uploads to avoid blasting API
-                    // If parallel, this delay acts as a staggered start
-                    // If sequential, this is the delay between chunks
                     const base = settings.store.baseDelay || 1500;
                     const jitter = settings.store.jitter || 1000;
                     const delay = base + Math.random() * jitter;
                     await sleep(delay);
                 }
 
-                // Small wait loop to prevent tight CPU spin while waiting for workers
-                if (activeCount > 0) {
-                    await sleep(100);
-                } else if (index >= pendingIndices.length) {
-                    // All submitted and active count is 0
-                    break;
-                }
+                if (activeCount > 0) await sleep(100);
+                else if (index >= pendingIndices.length) break;
             }
 
             session.status = 'completed';

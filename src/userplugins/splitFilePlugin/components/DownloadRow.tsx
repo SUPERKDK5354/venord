@@ -184,7 +184,11 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
     const isComplete = session.chunks.length === session.totalChunks;
     const isDlComplete = dlState?.status === 'completed';
     
-    const repairStatus = repairState ? (repairState.status === 'verifying' ? "Verifying..." : repairState.status === 'repairing' ? `Repairing ${repairState.repairedChunks}/${repairState.totalBadChunks}` : "Complete") : null;
+    const repairStatus = repairState ? (
+        repairState.status === 'verifying' ? "Verifying..." : 
+        repairState.status === 'repairing' ? `Repairing ${repairState.repairedChunks}/${repairState.totalBadChunks} (${formatSize(repairState.speed)}/s)` : 
+        "Complete"
+    ) : null;
 
     return (
         <div style={{ 
@@ -206,7 +210,7 @@ export const DownloadRow = ({ session }: { session: DetectedFileSession }) => {
                     </Text>
                     {isComplete && <Text variant="text-xs/bold" color="text-positive">Complete</Text>}
                     {isDownloading && dlState && (
-                        <TooltipContainer text={`Active Chunks: ${dlState.chunksDownloaded.size}/${session.totalChunks}`}>
+                        <TooltipContainer text={`Active Chunks: ${dlState.chunksDownloaded.size}/${session.totalChunks} (${(dlState.speed / (session.size / session.totalChunks)).toFixed(1)} chunks/s)`}>
                             <Text variant="text-xs/normal" color="text-brand" style={{ cursor: 'help' }}>
                                 • {formatSize(dlState.speed)}/s
                             </Text>
