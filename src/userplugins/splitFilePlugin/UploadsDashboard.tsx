@@ -116,6 +116,7 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
                     </Text>
                     
                     <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '8px', paddingLeft: '8px' }}>Manager</Text>
+                    <SidebarItem label="Activity" selected={tab === 'ACTIVITY'} onClick={() => setTab('ACTIVITY')} />
                     <SidebarItem label="Your Uploads" selected={tab === 'YOUR_UPLOADS'} onClick={() => setTab('YOUR_UPLOADS')} />
                     <SidebarItem label="All Uploads" selected={tab === 'ALL_UPLOADS'} onClick={() => setTab('ALL_UPLOADS')} />
                     <SidebarItem label="Current Channel" selected={tab === 'CURRENT_CHANNEL'} onClick={() => setTab('CURRENT_CHANNEL')} />
@@ -144,6 +145,7 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
                 <div style={{ flex: 1, padding: '32px 40px', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background-primary)', overflow: 'hidden' }}>
                 <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
                     <Text variant="heading-xl/bold">{
+                        tab === 'ACTIVITY' ? 'Ongoing Activity' :
                         tab === 'YOUR_UPLOADS' ? 'Your Uploads' :
                         tab === 'ALL_UPLOADS' ? 'All Uploads' :
                         tab === 'SETTINGS' ? 'Settings' : 'Current Channel'
@@ -287,48 +289,50 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
                     ) : (
                     <>
                     {/* TOOLBAR */}
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: "end" }}>
-                        <div style={{ flexGrow: 1, minWidth: '200px' }}>
-                            <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Search</Text>
-                            <TextInput 
-                                placeholder="Filename..." 
-                                value={searchQuery} 
-                                onChange={setSearchQuery} 
-                            />
-                        </div>
-                        
-                        <div>
-                            <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Sort By</Text>
-                            <div style={{ display: 'flex', gap: '4px' }}>
-                                <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortBy(sortBy === 'date' ? 'name' : sortBy === 'name' ? 'size' : 'date')}>
-                                    {sortBy === 'date' ? 'Date' : sortBy === 'name' ? 'Name' : 'Size'}
-                                </Button>
-                                <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
-                                    {sortDirection === 'asc' ? '↑' : '↓'}
-                                </Button>
+                    {tab !== 'ACTIVITY' && (
+                        <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', flexWrap: 'wrap', alignItems: "end" }}>
+                            <div style={{ flexGrow: 1, minWidth: '200px' }}>
+                                <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Search</Text>
+                                <TextInput 
+                                    placeholder="Filename..." 
+                                    value={searchQuery} 
+                                    onChange={setSearchQuery} 
+                                />
                             </div>
-                        </div>
-
-                        {tab === 'CURRENT_CHANNEL' && (
+                            
                             <div>
-                                <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Scanner</Text>
+                                <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Sort By</Text>
                                 <div style={{ display: 'flex', gap: '4px' }}>
-                                    <TextInput 
-                                        placeholder="100"
-                                        value={scanLimit} 
-                                        onChange={setScanLimit}
-                                        style={{ width: "60px" }}
-                                    />
-                                    <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
-                                        {isScanning ? "..." : "Scan"}
+                                    <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortBy(sortBy === 'date' ? 'name' : sortBy === 'name' ? 'size' : 'date')}>
+                                        {sortBy === 'date' ? 'Date' : sortBy === 'name' ? 'Name' : 'Size'}
+                                    </Button>
+                                    <Button size={Button.Sizes.SMALL} look={Button.Looks.OUTLINED} onClick={() => setSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
+                                        {sortDirection === 'asc' ? '↑' : '↓'}
                                     </Button>
                                 </div>
                             </div>
-                        )}
-                    </div>
+
+                            {tab === 'CURRENT_CHANNEL' && (
+                                <div>
+                                    <Text variant="eyebrow" color="text-muted" style={{ marginBottom: '4px' }}>Scanner</Text>
+                                    <div style={{ display: 'flex', gap: '4px' }}>
+                                        <TextInput 
+                                            placeholder="100"
+                                            value={scanLimit} 
+                                            onChange={setScanLimit}
+                                            style={{ width: "60px" }}
+                                        />
+                                        <Button size={Button.Sizes.SMALL} onClick={handleScan} disabled={isScanning}>
+                                            {isScanning ? "..." : "Scan"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* FILTERS ROW */}
-                    {tab !== 'YOUR_UPLOADS' && (
+                    {tab !== 'YOUR_UPLOADS' && tab !== 'ACTIVITY' && (
                         <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
                             <TextInput 
                                 placeholder="Filter by User ID" 
@@ -349,17 +353,66 @@ export const UploadsDashboard = (props: { initialTab?: string } & any) => {
 
                     {/* LIST */}
                     <div className="upload-list" key={tab} style={{ overflowY: 'auto', flex: 1, paddingRight: '8px' }}>
-                        {displayList.length === 0 ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '40px', opacity: 0.5 }}>
-                                <Text variant="heading-lg/semibold">No files found</Text>
-                                <Text variant="text-md/normal">Try scanning or adjusting filters</Text>
-                            </div>
+                        {tab === 'ACTIVITY' ? (
+                            <>
+                                {uploads.filter(u => u.status === 'uploading' || u.status === 'pending' || u.status === 'paused').length > 0 && (
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <Text variant="heading-sm/bold" style={{ marginBottom: '8px', opacity: 0.8 }}>Active Uploads</Text>
+                                        {uploads.filter(u => u.status === 'uploading' || u.status === 'pending' || u.status === 'paused').map(item => (
+                                            <UploadRow key={`up-${item.id}`} session={item} />
+                                        ))}
+                                    </div>
+                                )}
+                                
+                                {detectedFiles.filter(f => {
+                                    const dl = DownloadManager.downloads.get(f.id);
+                                    return dl && (dl.status === 'downloading' || dl.status === 'merging' || dl.status === 'pending' || dl.status === 'paused');
+                                }).length > 0 && (
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <Text variant="heading-sm/bold" style={{ marginBottom: '8px', opacity: 0.8 }}>Active Downloads</Text>
+                                        {detectedFiles.filter(f => {
+                                            const dl = DownloadManager.downloads.get(f.id);
+                                            return dl && (dl.status === 'downloading' || dl.status === 'merging' || dl.status === 'pending' || dl.status === 'paused');
+                                        }).map(item => (
+                                            <DownloadRow key={`dl-${item.id}`} session={item} />
+                                        ))}
+                                    </div>
+                                )}
+
+                                {detectedFiles.filter(f => DownloadManager.activeRepairs.has(f.id)).length > 0 && (
+                                    <div style={{ marginBottom: '24px' }}>
+                                        <Text variant="heading-sm/bold" style={{ marginBottom: '8px', opacity: 0.8 }}>Active Repairs</Text>
+                                        {detectedFiles.filter(f => DownloadManager.activeRepairs.has(f.id)).map(item => (
+                                            <DownloadRow key={`rep-${item.id}`} session={item} />
+                                        ))}
+                                    </div>
+                                )}
+
+                                {uploads.filter(u => u.status === 'uploading' || u.status === 'pending' || u.status === 'paused').length === 0 &&
+                                 detectedFiles.filter(f => {
+                                     const dl = DownloadManager.downloads.get(f.id);
+                                     return dl && (dl.status === 'downloading' || dl.status === 'merging' || dl.status === 'pending' || dl.status === 'paused');
+                                 }).length === 0 &&
+                                 detectedFiles.filter(f => DownloadManager.activeRepairs.has(f.id)).length === 0 && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '40px', opacity: 0.5 }}>
+                                        <Text variant="heading-lg/semibold">No active tasks</Text>
+                                        <Text variant="text-md/normal">Relax, everything is quiet.</Text>
+                                    </div>
+                                )}
+                            </>
                         ) : (
-                            displayList.map((item: any) => (
-                                tab === 'YOUR_UPLOADS' 
-                                    ? <UploadRow key={`up-${item.id}`} session={item} />
-                                    : <DownloadRow key={`dl-${item.id}`} session={item} />
-                            ))
+                            displayList.length === 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '40px', opacity: 0.5 }}>
+                                    <Text variant="heading-lg/semibold">No files found</Text>
+                                    <Text variant="text-md/normal">Try scanning or adjusting filters</Text>
+                                </div>
+                            ) : (
+                                displayList.map((item: any) => (
+                                    tab === 'YOUR_UPLOADS' 
+                                        ? <UploadRow key={`up-${item.id}`} session={item} />
+                                        : <DownloadRow key={`dl-${item.id}`} session={item} />
+                                ))
+                            )
                         )}
                     </div>
                     </>
